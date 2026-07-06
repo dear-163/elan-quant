@@ -5,8 +5,8 @@
 const MIN_HISTORY = 60;
 const MATURE_HISTORY = 252;
 
-function json(obj, status = 200) {
-  return new Response(JSON.stringify(obj), { status, headers: { 'Content-Type': 'application/json' } });
+function json(obj, status = 200, extraHeaders = {}) {
+  return new Response(JSON.stringify(obj), { status, headers: { 'Content-Type': 'application/json', ...extraHeaders } });
 }
 
 // 從 rows（依日期升冪排序）算出某個子指標「每一天」的原始值序列，跳過算不出來的日子（不是用0頂替）。
@@ -91,8 +91,10 @@ function levelOf(score) {
 }
 
 export async function onRequestGet(context) {
-  const { env } = context;
+  const { request, env } = context;
   if (!env.ELAN_QUANT_DB) {
+    // Don't cache this branch — it's a mid-setup state that can change the moment the user
+    // finishes binding D1, and we don't want to serve a stale "not bound" message afterward.
     return json({
       indicators: [],
       readyCount: 0,
@@ -101,6 +103,13 @@ export async function onRequestGet(context) {
       maturityMessage: 'D1 資料庫尚未綁定，無法計算市場情緒指數。',
     });
   }
+
+  // This is one global (non-symbol-specific) resource that only changes once a day when
+  // worker-cron runs, so a short cache meaningfully cuts down on repeat D1 reads.
+  const cache = caches.default;
+  const cacheKey = new Request('https://elan-quant-cache.internal/sentiment', { method: 'GET' });
+  const cached = await cache.match(cacheKey);
+  if (cached) return cached;
 
   let rows;
   try {
@@ -113,13 +122,15 @@ export async function onRequestGet(context) {
   }
 
   if (rows.length === 0) {
-    return json({
+    const response = json({
       indicators: [],
       readyCount: 0,
       totalIndicators: INDICATORS.length,
       greedIndex: null,
       maturityMessage: '資料累積中，0/5 項可用（尚無任何歷史資料，請確認每日排程 Worker 已部署並執行過）。',
-    });
+    }, 200, { 'Cache-Control': 'public, max-age=600' });
+    context.waitUntil(cache.put(cacheKey, response.clone()));
+    return response;
   }
 
   const indicators = INDICATORS.map(ind => {
@@ -154,7 +165,7 @@ export async function onRequestGet(context) {
     maturityMessage = `資料累積中，${ready.length}/${INDICATORS.length} 項指標可用（需要至少 3 項才能顯示總分）。`;
   }
 
-  return json({
+  const response = json({
     indicators,
     readyCount: ready.length,
     totalIndicators: INDICATORS.length,
@@ -163,5 +174,7 @@ export async function onRequestGet(context) {
     maturityMessage,
     methodology: '等權重 + 歷史百分位標準化（近252個交易日），方法論參考 CNN Fear & Greed Index，非官方標準，僅供參考。',
     latestDate: rows[rows.length - 1].date,
-  });
+  }, 200, { 'Cache-Control': 'public, max-age=600' });
+  context.waitUntil(cache.put(cacheKey, response.clone()));
+  return response;
 }

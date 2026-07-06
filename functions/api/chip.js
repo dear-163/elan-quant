@@ -4,8 +4,8 @@
 const SYMBOL_RE = /^[A-Za-z0-9.\-]{1,15}$/;
 const BROWSER_HEADERS = { 'Accept': 'application/json', 'User-Agent': 'Mozilla/5.0 (compatible; ElanQuant/1.0)' };
 
-function json(obj, status = 200) {
-  return new Response(JSON.stringify(obj), { status, headers: { 'Content-Type': 'application/json' } });
+function json(obj, status = 200, extraHeaders = {}) {
+  return new Response(JSON.stringify(obj), { status, headers: { 'Content-Type': 'application/json', ...extraHeaders } });
 }
 
 function stockCodeFromSymbol(symbol) {
@@ -182,11 +182,21 @@ export async function onRequestGet(context) {
   }
   const stockCode = stockCodeFromSymbol(symbol);
 
+  // MI_MARGN/TDCC/T86 all update at most once per trading day, but this handler re-fetches and
+  // re-parses a ~68k-line TDCC CSV plus up to 12 sequential T86 requests on every call — cache the
+  // response for a few minutes so repeat lookups (or abuse) don't multiply that cost per visitor.
+  const cache = caches.default;
+  const cacheKey = new Request(`https://elan-quant-cache.internal/chip/${stockCode}`, { method: 'GET' });
+  const cached = await cache.match(cacheKey);
+  if (cached) return cached;
+
   const [margin, holders, institutional] = await Promise.all([
     fetchMargin(stockCode),
     fetchHolderDistribution(stockCode, env),
     fetchInstitutionalFlow(stockCode),
   ]);
 
-  return json({ margin, holders, institutional });
+  const response = json({ margin, holders, institutional }, 200, { 'Cache-Control': 'public, max-age=300' });
+  context.waitUntil(cache.put(cacheKey, response.clone()));
+  return response;
 }
