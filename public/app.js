@@ -48,9 +48,10 @@ async function analyze(){
   document.querySelectorAll('.tab-pane').forEach(p=>{p.classList.remove('active');p.classList.add('hidden');});
   document.getElementById('analyzeBtn').disabled=true;
 
+  const needsKey='<div class="info-box">⚠️ 尚未設定 Gemini API Key，無法產生 AI 分析。請點上方「🔑 使用自己的 API Key」設定你自己的 Gemini Key（<a href="https://aistudio.google.com/app/apikey" target="_blank">免費申請</a>）。</div>';
   const waiting='<div class="fund-loading"><div class="spinner"></div><span>Gemini AI 正在生成分析報告⋯</span></div>';
   ['fundContent','riskContent','conclusionContent'].forEach(id=>{
-    document.getElementById(id).innerHTML=waiting;
+    document.getElementById(id).innerHTML=apiKey?waiting:needsKey;
   });
 
   try{
@@ -70,9 +71,11 @@ async function analyze(){
     });
     document.querySelectorAll('.tab').forEach((t,i)=>i===0?t.classList.add('active'):t.classList.remove('active'));
 
-    const techSummary=buildTechSummary(sym,data,info);
-    const companyName=info.longName||info.shortName||sym;
-    runGeminiAnalysis(sym,companyName,techSummary);
+    if(apiKey){
+      const techSummary=buildTechSummary(sym,data,info);
+      const companyName=info.longName||info.shortName||sym;
+      runGeminiAnalysis(sym,companyName,techSummary);
+    }
   }catch(e){
     document.getElementById('errorBox').innerHTML='⚠ <strong>'+e.message.replace(/\n/g,'<br>')+'</strong>';
     document.getElementById('errorBox').classList.remove('hidden');
@@ -426,18 +429,33 @@ function drawMACDChart(labels,ml,sig,hist){
     scales:{x:{display:false},y:{ticks:{color:'#9090a8',font:{size:11}},grid:{color:'rgba(255,255,255,0.05)'}}}}});
 }
 
+async function fetchGroundingText(symbol,section){
+  try{
+    let url=`/api/ground?symbol=${encodeURIComponent(symbol)}&section=${encodeURIComponent(section)}`;
+    if(fmpKey) url+=`&fmpKey=${encodeURIComponent(fmpKey)}`;
+    const res=await fetch(url);
+    if(!res.ok) return '';
+    const body=await res.json().catch(()=>({}));
+    return body.groundingText||'';
+  }catch{
+    return '';
+  }
+}
+
 async function runGeminiAnalysis(symbol,companyName,techSummary){
-  const base={symbol,companyName,techSummary,model:selectedModel,fmpKey};
-  await streamGemini({...base,section:'fundamentals'},'fundContent','🏢 公司基本面 + 財務健康（重點一、二）',false);
-  await streamGemini({...base,section:'valuation'},'fundContent','💰 估值合理性分析（重點三）',true);
+  const base={symbol,companyName,techSummary,model:selectedModel};
+  const fundGrounding=await fetchGroundingText(symbol,'fundamentals');
+  await streamGemini({...base,section:'fundamentals',groundingText:fundGrounding},'fundContent','🏢 公司基本面 + 財務健康（重點一、二）',false);
+  const valGrounding=await fetchGroundingText(symbol,'valuation');
+  await streamGemini({...base,section:'valuation',groundingText:valGrounding},'fundContent','💰 估值合理性分析（重點三）',true);
   await streamGemini({...base,section:'risk'},'riskContent','⚠️ 風險因素評估（重點四）',false);
   await streamGemini({...base,section:'conclusion'},'conclusionContent','📋 投資結論整理（重點五）',false);
 }
 
 async function sleep(ms){return new Promise(r=>setTimeout(r,ms));}
 
-// Kept in sync with the SECTIONS prompt text in functions/api/analyze.js —
-// duplicated here so a user's own Gemini key never has to touch our backend.
+// The only copy of these section prompts now — Gemini is always called directly with the
+// visitor's own key (see streamGemini), so there's no backend copy to keep in sync with anymore.
 const PROMPT_SECTIONS={
   fundamentals:`【分析重點一：公司基本面】每項附評語與評分（1-5星）：
 - 商業模式與價值創造邏輯
@@ -471,7 +489,7 @@ const PROMPT_SECTIONS={
 5. 綜合評級（從四選一並說明）：強烈關注 / 值得追蹤 / 中性觀望 / 暫時迴避
 最後加免責聲明段落。`,
 };
-function buildPromptClientSide(symbol,companyName,techSummary,section){
+function buildPromptClientSide(symbol,companyName,techSummary,section,groundingText){
   const base=`你是一位資深股票研究分析師，擁有15年以上台灣與全球股票市場研究經驗。
 
 技術面數據摘要（供參考）：
@@ -480,7 +498,7 @@ ${techSummary}
 分析對象：${companyName}（${symbol}）
 請用繁體中文回答，格式使用 HTML（<h3><ul><li><p><strong><table>標籤），不要包含任何 markdown 或程式碼區塊標記。
 所有分析基於公開事實，不確定處請說明，多空平衡，不偏樂觀或悲觀。`;
-  return `${base}\n\n${PROMPT_SECTIONS[section]}`;
+  return `${base}\n\n${PROMPT_SECTIONS[section]}${groundingText||''}`;
 }
 
 async function streamGemini(payload,targetId,cardTitle,append,retryCount=0){
@@ -494,13 +512,13 @@ async function streamGemini(payload,targetId,cardTitle,append,retryCount=0){
   const contentEl=document.getElementById(cardId);
 
   try{
-    const res=apiKey ? await fetch(
+    const res=await fetch(
       `https://generativelanguage.googleapis.com/v1beta/models/${payload.model||selectedModel}:streamGenerateContent?alt=sse&key=${apiKey}`,
       {
         method:'POST',
         headers:{'Content-Type':'application/json'},
         body:JSON.stringify({
-          contents:[{role:'user',parts:[{text:buildPromptClientSide(payload.symbol,payload.companyName,payload.techSummary,payload.section)}]}],
+          contents:[{role:'user',parts:[{text:buildPromptClientSide(payload.symbol,payload.companyName,payload.techSummary,payload.section,payload.groundingText)}]}],
           generationConfig:{temperature:0.7,maxOutputTokens:4096,thinkingConfig:{thinkingLevel:'low'}},
           safetySettings:[
             {category:'HARM_CATEGORY_HARASSMENT',threshold:'BLOCK_NONE'},
@@ -510,19 +528,11 @@ async function streamGemini(payload,targetId,cardTitle,append,retryCount=0){
           ],
         }),
       }
-    ) : await fetch('/api/analyze',{
-      method:'POST',
-      headers:{'Content-Type':'application/json'},
-      body:JSON.stringify(payload)
-    });
+    );
 
     if(!res.ok){
       const errBody=await res.json().catch(()=>({}));
       const errMsg=errBody?.error?.message||'';
-
-      if(/^RATE_LIMIT:/.test(errMsg)){
-        throw new Error(errMsg.replace(/^RATE_LIMIT:\s*/,''));
-      }
 
       if(res.status===429||res.status===503){
         // "limit: 0" means the key/project truly has no quota at all (misconfigured project).

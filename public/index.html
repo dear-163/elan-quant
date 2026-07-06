@@ -31,25 +31,25 @@
   </div>
 </div>
 
-<details class="adv-settings">
-  <summary>🔑 使用自己的 API Key（進階，不受每日次數限制）</summary>
+<details class="adv-settings" open>
+  <summary>🔑 設定你的 Gemini API Key（AI 分析必填）</summary>
   <div class="adv-settings-body">
     <div class="adv-row">
       <span class="adv-label">Gemini Key</span>
-      <input type="password" id="apiKeyInput" placeholder="AIza...（留空則使用預設額度，每日有次數限制）" />
+      <input type="password" id="apiKeyInput" placeholder="AIza...（必填，才能使用 AI 分析）" />
       <button class="btn btn-sm" onclick="saveApiKey()">儲存</button>
       <span id="keyStatus" class="key-status key-unset">未設定</span>
     </div>
     <div class="adv-row">
       <span class="adv-label">FMP Key</span>
-      <input type="password" id="fmpKeyInput" placeholder="補充美股財報數據（選填）" />
+      <input type="password" id="fmpKeyInput" placeholder="補充美股財報數據，讓 AI 分析更準確（選填）" />
       <button class="btn btn-sm" onclick="saveFmpKey()">儲存</button>
       <span id="fmpStatus" class="key-status key-unset">未設定</span>
     </div>
     <div class="adv-hint">
       Gemini：<a href="https://aistudio.google.com/app/apikey" target="_blank">aistudio.google.com</a>（免費）｜
       FMP：<a href="https://financialmodelingprep.com/developer/docs" target="_blank">financialmodelingprep.com</a>（免費 250次/天）<br>
-      設定 Gemini Key 後，AI 分析會直接從你的瀏覽器呼叫 Google，金鑰不會經過本站伺服器，也不受每日次數限制。
+      Key 只會存在你自己的瀏覽器裡，AI 分析會直接從你的瀏覽器呼叫 Google，金鑰不會經過本站伺服器。技術分析（價格、K線、指標）不需要任何 Key 即可使用。
     </div>
   </div>
 </details>
@@ -65,7 +65,7 @@
 
   <div class="welcome" id="welcomeBox">
     <h2>Élan Quant</h2>
-    <p>整合即時技術分析（Yahoo Finance）與 Gemini AI 基本面分析，提供完整投資參考報告。</p>
+    <p>整合即時技術分析（Yahoo Finance）與 Gemini AI 基本面分析，提供完整投資參考報告。技術分析免設定即可使用；AI 分析需要在上方填入你自己的免費 Gemini API Key。</p>
     <div class="examples">
       <span class="ex-tag" onclick="quickLoad('AAPL')">AAPL（蘋果）</span>
       <span class="ex-tag" onclick="quickLoad('2330.TW')">2330.TW（台積電）</span>
