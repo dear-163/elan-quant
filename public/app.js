@@ -84,20 +84,20 @@ async function analyze(){
       chipData=await fetchChip(sym);
       renderChip(chipData);
     }catch(e){
-      document.getElementById('chipContent').innerHTML=`<div class="error-box">⚠ 籌碼面資料取得失敗：${e.message}</div>`;
+      document.getElementById('chipContent').innerHTML=`<div class="error-box">⚠ 籌碼面資料取得失敗：${escapeHtml(e.message)}</div>`;
     }
     try{
       sentimentData=await fetchSentiment();
       renderSentiment(sentimentData);
     }catch(e){
-      document.getElementById('sentimentContent').innerHTML=`<div class="error-box">⚠ 市場情緒指數取得失敗：${e.message}</div>`;
+      document.getElementById('sentimentContent').innerHTML=`<div class="error-box">⚠ 市場情緒指數取得失敗：${escapeHtml(e.message)}</div>`;
     }
 
     if(apiKey){
       runSummaryAnalysis(sym,companyName,techSummary,chipData,sentimentData,info);
     }
   }catch(e){
-    document.getElementById('errorBox').innerHTML='⚠ <strong>'+e.message.replace(/\n/g,'<br>')+'</strong>';
+    document.getElementById('errorBox').innerHTML='⚠ <strong>'+escapeHtml(e.message).replace(/\n/g,'<br>')+'</strong>';
     document.getElementById('errorBox').classList.remove('hidden');
     document.getElementById('loadingBox').classList.add('hidden');
   }finally{
@@ -610,13 +610,19 @@ async function streamGemini(payload,targetId,cardTitle,append,retryCount=0){
 }
 
 // ---- 籌碼面 ----
+// Error/field-name strings can echo back external API content (e.g. TDCC/TWSE's own field
+// names when their schema doesn't match what we expect) — escape before innerHTML in case
+// an upstream response ever contains HTML-special characters.
+function escapeHtml(s){
+  return String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
 function fmtField(field,formatter){
   if(!field) return '<span style="color:var(--text3)">暫無資料</span>';
-  if(field.error) return `<span style="color:var(--text3)">暫無資料</span><div class="src-note">${field.error}</div>`;
-  if(field.value==null) return `<span style="color:var(--text3)">暫無資料</span>${field.note?`<div class="src-note">${field.note}</div>`:''}`;
+  if(field.error) return `<span style="color:var(--text3)">暫無資料</span><div class="src-note">${escapeHtml(field.error)}</div>`;
+  if(field.value==null) return `<span style="color:var(--text3)">暫無資料</span>${field.note?`<div class="src-note">${escapeHtml(field.note)}</div>`:''}`;
   const val=formatter?formatter(field.value):field.value;
   const src=field.source?`${field.source}${field.date?'／'+field.date:''}`:'';
-  return `${val}${src?`<div class="src-note">來源：${src}</div>`:''}`;
+  return `${val}${src?`<div class="src-note">來源：${escapeHtml(src)}</div>`:''}`;
 }
 
 async function fetchChip(symbol){
@@ -634,21 +640,21 @@ function renderChip(data){
   el.innerHTML=`
   <div class="indicator-grid">
     <div class="ind-card"><div class="ind-title">📑 融資融券</div>
-      ${m.error?`<div class="error-box">⚠ 暫無資料：${m.error}</div>`:`
+      ${m.error?`<div class="error-box">⚠ 暫無資料：${escapeHtml(m.error)}</div>`:`
       <div class="ind-row"><span class="ind-name">融資今日餘額</span><span class="ind-val">${fmtField(m.marginBalance,num)}</span></div>
       <div class="ind-row"><span class="ind-name">融資使用率</span><span class="ind-val">${fmtField(m.marginUsageRate,pct)}</span></div>
       <div class="ind-row"><span class="ind-name">融券今日餘額</span><span class="ind-val">${fmtField(m.shortBalance,num)}</span></div>
       <div class="ind-row"><span class="ind-name">券資比</span><span class="ind-val">${fmtField(m.shortToMarginRatio,pct)}</span></div>`}
     </div>
     <div class="ind-card"><div class="ind-title">👥 大戶持股結構</div>
-      ${h.error?`<div class="error-box">⚠ 暫無資料：${h.error}</div>`:`
+      ${h.error?`<div class="error-box">⚠ 暫無資料：${escapeHtml(h.error)}</div>`:`
       <div class="ind-row"><span class="ind-name">千張大戶佔比</span><span class="ind-val">${fmtField(h.bigHolderPct,v=>v.toFixed(2)+'%')}</span></div>
       <div class="ind-row"><span class="ind-name">中實戶佔比</span><span class="ind-val">${fmtField(h.midHolderPct,v=>v.toFixed(2)+'%')}</span></div>
       <div class="ind-row"><span class="ind-name">週變化（千張大戶）</span><span class="ind-val">${fmtField(h.weeklyChange,v=>(v>=0?'+':'')+v.toFixed(2)+'%')}</span></div>
       <div class="src-note" style="margin-top:6px">集保股權分散表每週五更新一次，其餘平日資料不變。</div>`}
     </div>
     <div class="ind-card"><div class="ind-title">🏦 三大法人買賣超（近5日）</div>
-      ${inst.error?`<div class="error-box">⚠ 暫無資料：${inst.error}</div>`:`
+      ${inst.error?`<div class="error-box">⚠ 暫無資料：${escapeHtml(inst.error)}</div>`:`
       <div class="ind-row"><span class="ind-name">外資累計買賣超</span><span class="ind-val ${inst.foreignNet5d?.value>0?'up':inst.foreignNet5d?.value<0?'down':''}">${fmtField(inst.foreignNet5d,num)}</span></div>
       <div class="ind-row"><span class="ind-name">投信累計買賣超</span><span class="ind-val ${inst.trustNet5d?.value>0?'up':inst.trustNet5d?.value<0?'down':''}">${fmtField(inst.trustNet5d,num)}</span></div>
       <div class="ind-row"><span class="ind-name">自營商累計買賣超</span><span class="ind-val">${fmtField(inst.dealerNet5d,num)}</span></div>
@@ -782,7 +788,7 @@ async function runSummaryAnalysis(symbol,companyName,techSummary,chipData,sentim
   await streamGemini({prompt,model:selectedModel},'summaryContent','🧭 四面向綜合摘要',false);
   const rawEl=document.createElement('div');
   rawEl.className='fund-card';
-  rawEl.innerHTML=`<div class="fund-card-title">📎 原始數據（供核對 AI 摘要是否正確）</div><div class="fund-content" style="font-family:monospace;font-size:12px;white-space:pre-wrap">${JSON.stringify(summaryData,null,2).replace(/</g,'&lt;')}</div>`;
+  rawEl.innerHTML=`<div class="fund-card-title">📎 原始數據（供核對 AI 摘要是否正確）</div><div class="fund-content" style="font-family:monospace;font-size:12px;white-space:pre-wrap">${escapeHtml(JSON.stringify(summaryData,null,2))}</div>`;
   document.getElementById('summaryContent').appendChild(rawEl);
 }
 
