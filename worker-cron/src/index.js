@@ -67,23 +67,40 @@ async function fetchMarginTotal() {
 
 // NOTE: this legacy www.twse.com.tw endpoint wants AD date format (YYYYMMDD), unlike the
 // openapi.twse.com.tw endpoints elsewhere in this file which use ROC dates — verified by testing.
-async function fetchInstitutionalCounts(adDate) {
+//
+// This endpoint is also empirically flaky: back-to-back requests with the IDENTICAL date param
+// have been observed to fail once with a garbled "stat" message and then succeed immediately
+// after, with no other change. Since the cron only gets one shot at "today" per day (there's no
+// fallback date to shift to, unlike functions/api/chip.js's multi-day loop), a transient failure
+// here retries a few times before giving up and leaving the day's count as NULL.
+async function fetchInstitutionalCounts(adDate, retries = 3) {
   const url = `https://www.twse.com.tw/rwd/zh/fund/T86?response=json&date=${adDate}&selectType=ALL`;
-  const res = await fetch(url, { headers: BROWSER_HEADERS });
-  if (!res.ok) throw new Error(`T86 HTTP ${res.status}`);
-  const body = await res.json();
-  if (!body || body.stat !== 'OK' || !Array.isArray(body.data)) {
-    throw new Error(`T86 stat=${body?.stat}（可能是非交易日或假日，屬預期情況）`);
+  let lastError;
+  for (let attempt = 1; attempt <= retries; attempt++) {
+    try {
+      const res = await fetch(url, { headers: BROWSER_HEADERS });
+      if (!res.ok) { lastError = new Error(`T86 HTTP ${res.status}`); continue; }
+      const body = await res.json();
+      if (!body || body.stat !== 'OK' || !Array.isArray(body.data)) {
+        lastError = new Error(`T86 stat=${body?.stat}（可能是非交易日/假日，或此端點暫時性異常，已重試 ${attempt} 次）`);
+        if (attempt < retries) await new Promise(r => setTimeout(r, 1500));
+        continue;
+      }
+      const idx = body.fields.indexOf('三大法人買賣超股數');
+      if (idx === -1) throw new Error(`T86 欄位不含「三大法人買賣超股數」，實際欄位：${body.fields.join('、')}`);
+      let buyCount = 0, sellCount = 0;
+      for (const row of body.data) {
+        const v = parseNum(row[idx]);
+        if (v == null) continue;
+        if (v > 0) buyCount++; else if (v < 0) sellCount++;
+      }
+      return { buyCount, sellCount };
+    } catch (e) {
+      lastError = e;
+      break; // schema mismatch / thrown errors are not the flaky-response case — don't retry those
+    }
   }
-  const idx = body.fields.indexOf('三大法人買賣超股數');
-  if (idx === -1) throw new Error(`T86 欄位不含「三大法人買賣超股數」，實際欄位：${body.fields.join('、')}`);
-  let buyCount = 0, sellCount = 0;
-  for (const row of body.data) {
-    const v = parseNum(row[idx]);
-    if (v == null) continue;
-    if (v > 0) buyCount++; else if (v < 0) sellCount++;
-  }
-  return { buyCount, sellCount };
+  throw lastError;
 }
 
 async function fetchStockDayAll() {
