@@ -1,0 +1,133 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Élan Quant</title>
+<link rel="stylesheet" href="styles.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js"></script>
+</head>
+<body>
+
+<div class="header">
+  <div class="brand">✨ Élan Quant</div>
+  <div class="search-row">
+    <input type="text" id="symbolInput" placeholder="股票代號，如 AAPL、2330.TW、NVDA" />
+    <button class="btn" id="analyzeBtn" onclick="analyze()">開始分析</button>
+  </div>
+  <div class="period-row">
+    <button class="btn-ghost active" onclick="setPeriod('3mo',this)">3個月</button>
+    <button class="btn-ghost" onclick="setPeriod('6mo',this)">6個月</button>
+    <button class="btn-ghost" onclick="setPeriod('1y',this)">1年</button>
+    <button class="btn-ghost" onclick="setPeriod('2y',this)">2年</button>
+  </div>
+  <div class="model-row">
+    🤖 AI 模型
+    <select id="modelSelect" class="model-select">
+      <option value="gemini-3.1-flash-lite">3.1 Flash-Lite（快速預覽，格式較不穩定）</option>
+      <option value="gemini-3.5-flash" selected>3.5 Flash（推薦，正式分析用）</option>
+      <option value="gemini-3.5-pro">3.5 Pro（最強，深度分析）</option>
+    </select>
+  </div>
+</div>
+
+<details class="adv-settings">
+  <summary>🔑 使用自己的 API Key（進階，不受每日次數限制）</summary>
+  <div class="adv-settings-body">
+    <div class="adv-row">
+      <span class="adv-label">Gemini Key</span>
+      <input type="password" id="apiKeyInput" placeholder="AIza...（留空則使用預設額度，每日有次數限制）" />
+      <button class="btn btn-sm" onclick="saveApiKey()">儲存</button>
+      <span id="keyStatus" class="key-status key-unset">未設定</span>
+    </div>
+    <div class="adv-row">
+      <span class="adv-label">FMP Key</span>
+      <input type="password" id="fmpKeyInput" placeholder="補充美股財報數據（選填）" />
+      <button class="btn btn-sm" onclick="saveFmpKey()">儲存</button>
+      <span id="fmpStatus" class="key-status key-unset">未設定</span>
+    </div>
+    <div class="adv-hint">
+      Gemini：<a href="https://aistudio.google.com/app/apikey" target="_blank">aistudio.google.com</a>（免費）｜
+      FMP：<a href="https://financialmodelingprep.com/developer/docs" target="_blank">financialmodelingprep.com</a>（免費 250次/天）<br>
+      設定 Gemini Key 後，AI 分析會直接從你的瀏覽器呼叫 Google，金鑰不會經過本站伺服器，也不受每日次數限制。
+    </div>
+  </div>
+</details>
+
+<div id="tabBar" class="tabs hidden">
+  <div class="tab active" onclick="switchTab('tech',this)">📈 技術分析</div>
+  <div class="tab" onclick="switchTab('fund',this)">🏢 基本面分析</div>
+  <div class="tab" onclick="switchTab('risk',this)">⚠️ 風險評估</div>
+  <div class="tab" onclick="switchTab('conclusion',this)">📋 投資結論</div>
+</div>
+
+<div class="main" id="mainReport">
+
+  <div class="welcome" id="welcomeBox">
+    <h2>Élan Quant</h2>
+    <p>整合即時技術分析（Yahoo Finance）與 Gemini AI 基本面分析，提供完整投資參考報告。</p>
+    <div class="examples">
+      <span class="ex-tag" onclick="quickLoad('AAPL')">AAPL（蘋果）</span>
+      <span class="ex-tag" onclick="quickLoad('2330.TW')">2330.TW（台積電）</span>
+      <span class="ex-tag" onclick="quickLoad('0050.TW')">0050.TW（元大台50）</span>
+      <span class="ex-tag" onclick="quickLoad('NVDA')">NVDA（輝達）</span>
+      <span class="ex-tag" onclick="quickLoad('MSFT')">MSFT（微軟）</span>
+      <span class="ex-tag" onclick="quickLoad('TSM')">TSM（台積電ADR）</span>
+    </div>
+    <p style="margin-top:18px;font-size:12px;color:var(--text3)">技術數據：Yahoo Finance｜基本面：Google Gemini AI｜僅供參考，不構成投資建議</p>
+  </div>
+
+  <div class="loading hidden" id="loadingBox"><div class="spinner"></div><span id="loadingText">正在獲取數據⋯</span></div>
+  <div id="errorBox" class="error-box hidden"></div>
+
+  <div id="pane-tech" class="tab-pane hidden">
+    <div style="display:flex;flex-direction:column;gap:16px;">
+      <div id="priceHeroBox"></div>
+      <div style="display:flex;gap:8px;align-items:center;">
+        <button class="btn-ghost btn-sm" onclick="copyTechConclusion()" title="複製技術面結論">複製技術結論</button>
+        <button class="btn-ghost btn-sm" onclick="downloadReport()" title="下載完整報告">下載報告</button>
+      </div>
+      <div id="signalBarBox"></div>
+      <div class="chart-card">
+        <div class="chart-title-bar">收盤價 + 均線 (MA5 / MA20 / MA60) + 布林通道</div>
+        <div class="chart-wrap" style="height:280px"><canvas id="priceChart" role="img" aria-label="價格走勢圖"></canvas></div>
+        <div class="source-note">數據來源：Yahoo Finance</div>
+      </div>
+      <div class="indicator-grid">
+        <div class="chart-card">
+          <div class="chart-title-bar">RSI (14) — 超買 &gt;70 / 超賣 &lt;30</div>
+          <div class="chart-wrap" style="height:160px"><canvas id="rsiChart" role="img" aria-label="RSI圖"></canvas></div>
+        </div>
+        <div class="chart-card">
+          <div class="chart-title-bar">MACD (12,26,9)</div>
+          <div class="chart-wrap" style="height:160px"><canvas id="macdChart" role="img" aria-label="MACD圖"></canvas></div>
+        </div>
+      </div>
+      <div class="indicator-grid" id="indGridBox"></div>
+      <div id="techConclusionBox"></div>
+      <div class="disclaimer">⚠ 技術分析僅供參考，不構成投資建議。</div>
+    </div>
+  </div>
+
+  <div id="pane-fund" class="tab-pane hidden">
+    <div class="fund-section" id="fundContent">
+      <div class="info-box">請輸入股票代號並點擊「開始分析」，即可在此查看 AI 基本面報告。</div>
+    </div>
+  </div>
+
+  <div id="pane-risk" class="tab-pane hidden">
+    <div class="fund-section" id="riskContent">
+      <div class="info-box">請輸入股票代號並點擊「開始分析」，即可在此查看 AI 風險評估。</div>
+    </div>
+  </div>
+
+  <div id="pane-conclusion" class="tab-pane hidden">
+    <div class="fund-section" id="conclusionContent">
+      <div class="info-box">請輸入股票代號並點擊「開始分析」，即可在此查看 AI 投資結論。</div>
+    </div>
+  </div>
+</div>
+
+<script src="app.js"></script>
+</body>
+</html>

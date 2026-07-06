@@ -1,0 +1,9 @@
+name = "elan-quant"
+compatibility_date = "2026-07-01"
+pages_build_output_dir = "public"
+
+# Create with: wrangler kv namespace create RATE_LIMIT_KV
+# then paste the returned id below (or bind it from the Cloudflare Pages dashboard instead).
+[[kv_namespaces]]
+binding = "RATE_LIMIT_KV"
+id = "REPLACE_WITH_YOUR_KV_NAMESPACE_ID"
