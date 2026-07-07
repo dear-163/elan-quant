@@ -185,63 +185,100 @@ async function fetchInstitutionalFlow(stockCode) {
   }
 }
 
-async function fetchTpexOpenApi(url, env) {
-  const targetUrl = env?.TPEX_PROXY_URL ? `${env.TPEX_PROXY_URL}?url=${encodeURIComponent(url)}` : url;
-  return await fetch(targetUrl, { headers: BROWSER_HEADERS });
+function getFinMindUrl(dataset, stockId, env) {
+  const tenDaysAgo = new Date(Date.now() - 12 * 86400000).toISOString().slice(0, 10);
+  let url = `https://api.finmindtrade.com/api/v4/data?dataset=${dataset}&data_id=${stockId}&start_date=${tenDaysAgo}`;
+  if (env?.FINMIND_TOKEN) {
+    url += `&token=${encodeURIComponent(env.FINMIND_TOKEN)}`;
+  }
+  return url;
 }
 
 async function fetchMarginTpex(stockCode, env) {
   try {
-    const res = await fetchTpexOpenApi('https://www.tpex.org.tw/openapi/v1/tpex_mainboard_margin_balance', env);
-    if (!res.ok) return { error: `TPEx tpex_mainboard_margin_balance 請求失敗：HTTP ${res.status}` };
-    const arr = await res.json();
-    if (!Array.isArray(arr)) return { error: 'TPEx tpex_mainboard_margin_balance 回應格式不是陣列，可能是端點已變更' };
-    const row = arr.find(r => (r['SecuritiesCompanyCode'] || '').trim() === stockCode);
-    if (!row) return { error: `TPEx 今日資料中找不到股票代號 ${stockCode}（可能非上櫃股票，或今日無交易）` };
-    const parseNum = v => { const n = parseFloat(String(v).replace(/,/g, '')); return isFinite(n) ? n : null; };
-    const marginBalance = parseNum(row['MarginPurchaseBalance']);
-    const utilizationPct = parseNum(row['MarginPurchaseUtilizationRate']); // TPEx already gives this as a percentage number (e.g. "3.99"), not a raw ratio
-    const shortBalance = parseNum(row['ShortSaleBalance']);
-    const isoDate = isoFromRocOrAd(row['Date']);
-    const source = 'TPEx tpex_mainboard_margin_balance';
+    const url = getFinMindUrl('TaiwanStockMarginPurchaseShortSale', stockCode, env);
+    const res = await fetch(url, { headers: BROWSER_HEADERS });
+    if (!res.ok) return { error: `FinMind margin API 請求失敗：HTTP ${res.status}` };
+    const json = await res.json();
+    if (json.status !== 200) return { error: `FinMind margin API 返回錯誤：${json.msg || '未知錯誤'}` };
+    const data = json.data;
+    if (!data || data.length === 0) return { error: `FinMind margin API 今日無資料` };
+    
+    const latest = data[data.length - 1];
+    const marginBalance = latest.MarginPurchaseTodayBalance;
+    const marginLimit = latest.MarginPurchaseLimit;
+    const shortBalance = latest.ShortSaleTodayBalance;
+    const isoDate = latest.date;
+    
+    const source = 'FinMind (TPEx)';
     return {
       marginBalance: { value: marginBalance, source, date: isoDate },
-      marginUsageRate: { value: utilizationPct != null ? utilizationPct / 100 : null, source, date: isoDate },
+      marginUsageRate: { value: (marginBalance && marginLimit) ? marginBalance / marginLimit : null, source, date: isoDate },
       shortBalance: { value: shortBalance, source, date: isoDate },
       shortToMarginRatio: { value: (shortBalance != null && marginBalance) ? shortBalance / marginBalance : null, source, date: isoDate },
     };
   } catch (e) {
-    if (e.message.includes('Too many redirects') || e.message.includes('redirect')) {
-      return { error: '櫃買中心 WAF 阻擋了 Cloudflare 節點請求（Too many redirects）。若需在上線環境查詢上櫃股票，請設定 TPEX_PROXY_URL 代理。' };
-    }
-    return { error: `TPEx tpex_mainboard_margin_balance 請求發生例外：${e.message}` };
+    return { error: `TPEx 融資融券查詢發生例外：${e.message}` };
   }
 }
 
 async function fetchInstitutionalFlowTpex(stockCode, env) {
   try {
-    const res = await fetchTpexOpenApi('https://www.tpex.org.tw/openapi/v1/tpex_3insti_daily_trading', env);
-    if (!res.ok) return { error: `TPEx tpex_3insti_daily_trading 請求失敗：HTTP ${res.status}` };
-    const arr = await res.json();
-    if (!Array.isArray(arr)) return { error: 'TPEx tpex_3insti_daily_trading 回應格式不是陣列，可能是端點已變更' };
-    const row = arr.find(r => (r['SecuritiesCompanyCode'] || '').trim() === stockCode);
-    if (!row) return { error: `TPEx 今日三大法人買賣超資料中找不到股票代號 ${stockCode}（可能非上櫃股票，或今日無交易）` };
-    const parseNum = v => { const n = parseFloat(String(v ?? '').replace(/,/g, '')); return isFinite(n) ? n : null; };
-    const isoDate = isoFromRocOrAd(row['Date']);
-    const source = 'TPEx tpex_3insti_daily_trading';
-    const foreignDiff = row['ForeignInvestorsIncludeMainlandAreaInvestors-Difference'] ?? row['ForeignInvestorsInclude MainlandAreaInvestors-Difference'];
+    const url = getFinMindUrl('TaiwanStockInstitutionalInvestorsBuySell', stockCode, env);
+    const res = await fetch(url, { headers: BROWSER_HEADERS });
+    if (!res.ok) return { error: `FinMind institutional API 請求失敗：HTTP ${res.status}` };
+    const json = await res.json();
+    if (json.status !== 200) return { error: `FinMind institutional API 返回錯誤：${json.msg || '未知錯誤'}` };
+    const data = json.data;
+    if (!data || data.length === 0) return { error: `FinMind institutional API 今日無資料` };
+    
+    const byDate = {};
+    for (const row of data) {
+      if (!byDate[row.date]) {
+        byDate[row.date] = { foreignNet: 0, trustNet: 0, dealerNet: 0 };
+      }
+      const net = row.buy - row.sell;
+      if (row.name === 'Foreign_Investor' || row.name === 'Foreign_Dealer_Self') {
+        byDate[row.date].foreignNet += net;
+      } else if (row.name === 'Investment_Trust') {
+        byDate[row.date].trustNet += net;
+      } else if (row.name === 'Dealer_self' || row.name === 'Dealer_Hedging') {
+        byDate[row.date].dealerNet += net;
+      }
+    }
+    
+    const sortedDates = Object.keys(byDate).sort().reverse();
+    const latestDates = sortedDates.slice(0, 5);
+    if (latestDates.length === 0) return { error: `FinMind institutional API 解析後無有效交易日` };
+    
+    const days = latestDates.map(date => ({
+      date,
+      foreignNet: byDate[date].foreignNet,
+      trustNet: byDate[date].trustNet,
+      dealerNet: byDate[date].dealerNet,
+    }));
+    
+    const source = 'FinMind (TPEx)';
+    const sum = (key) => days.reduce((s, d) => s + d[key], 0);
+    
+    let foreignStreak = 0;
+    for (const d of days) {
+      const sign = Math.sign(d.foreignNet);
+      if (foreignStreak === 0) foreignStreak = sign;
+      else if (Math.sign(d.foreignNet) !== Math.sign(foreignStreak)) break;
+      else foreignStreak += sign;
+    }
+    
     return {
-      period: '當日（上櫃僅提供單日資料，非近5日累計）',
-      foreignNet5d: { value: parseNum(foreignDiff), source, date: isoDate },
-      trustNet5d: { value: parseNum(row['SecuritiesInvestmentTrustCompanies-Difference']), source, date: isoDate },
-      dealerNet5d: { value: parseNum(row['Dealers-Difference']), source, date: isoDate },
-      foreignConsecutiveDays: null,
+      period: '近5日',
+      days: { value: days, source },
+      foreignNet5d: { value: sum('foreignNet'), source, date: days[0]?.date },
+      trustNet5d: { value: sum('trustNet'), source, date: days[0]?.date },
+      dealerNet5d: { value: sum('dealerNet'), source, date: days[0]?.date },
+      foreignConsecutiveDays: { value: foreignStreak, source, date: days[0]?.date },
     };
   } catch (e) {
-    if (e.message.includes('Too many redirects') || e.message.includes('redirect')) {
-      return { error: '櫃買中心 WAF 阻擋了 Cloudflare 節點請求（Too many redirects）。若需在上線環境查詢上櫃股票，請設定 TPEX_PROXY_URL 代理。' };
-    }
-    return { error: `TPEx tpex_3insti_daily_trading 請求發生例外：${e.message}` };
+    return { error: `TPEx 三大法人查詢發生例外：${e.message}` };
   }
 }
 
