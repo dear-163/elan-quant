@@ -791,16 +791,31 @@ function renderChip(data, etfData, lc){
           </thead>
           <tbody>
             ${etfData.flow.map(f => {
-              const hasBuy = f.changeShares > 0;
+              let badgeClass = 'badge-amber';
+              let colorStyle = 'var(--text3)';
+              let sign = '';
+              if (f.changeShares > 0) {
+                badgeClass = 'badge-red';
+                colorStyle = 'var(--red)';
+                sign = '+';
+              } else if (f.changeShares < 0) {
+                badgeClass = 'badge-green';
+                colorStyle = 'var(--green)';
+                sign = '';
+              }
+              const amtColor = f.changeAmount > 0 ? 'var(--red)' : (f.changeAmount < 0 ? 'var(--green)' : 'var(--text3)');
+              const wtColor = f.changeWeight > 0 ? 'var(--red)' : (f.changeWeight < 0 ? 'var(--green)' : 'var(--text3)');
+              const amtSign = f.changeAmount > 0 ? '+' : '';
+              const wtSign = f.changeWeight > 0 ? '+' : '';
               return `
               <tr style="border-bottom:1px solid var(--border);">
                 <td style="padding:8px 10px; font-weight:600; color:var(--blue); cursor:pointer;" onclick="quickLoad('${escapeHtml(f.stockCode)}.TW')">${escapeHtml(f.stockName)} (${escapeHtml(f.stockCode)})</td>
-                <td style="padding:8px 10px;"><span class="badge ${hasBuy ? 'badge-red' : 'badge-green'}">${escapeHtml(f.action)}</span></td>
-                <td style="padding:8px 10px; text-align:right; font-weight:700; color:${hasBuy ? 'var(--red)' : 'var(--green)'}">
-                  <div>${hasBuy ? '+' : ''}${f.changeShares.toLocaleString()} 股</div>
-                  <div style="font-size:10px; font-weight:normal; opacity:.7; color:${f.changeAmount > 0 ? 'var(--red)' : 'var(--green)'}">${f.changeAmount > 0 ? '+' : ''}${fmtAmt(f.changeAmount)}</div>
+                <td style="padding:8px 10px;"><span class="badge ${badgeClass}">${escapeHtml(f.action)}</span></td>
+                <td style="padding:8px 10px; text-align:right; font-weight:700; color:${colorStyle};">
+                  <div>${sign}${f.changeShares.toLocaleString()} 股</div>
+                  <div style="font-size:10px; font-weight:normal; opacity:.7; color:${amtColor};">${amtSign}${fmtAmt(f.changeAmount)}</div>
                 </td>
-                <td style="padding:8px 10px; text-align:right; color:${f.changeWeight > 0 ? 'var(--red)' : 'var(--green)'}">${f.changeWeight > 0 ? '+' : ''}${f.changeWeight.toFixed(2)}%</td>
+                <td style="padding:8px 10px; text-align:right; color:${wtColor};">${wtSign}${f.changeWeight.toFixed(2)}%</td>
                 <td style="padding:8px 10px; text-align:right; color:var(--text2);">
                   <div>${f.shares.toLocaleString()} 股</div>
                   <div style="font-size:10px; opacity:.7;">${fmtAmt(f.totalAmount)}</div>
@@ -832,16 +847,31 @@ function renderChip(data, etfData, lc){
             ${etfData.flow.map(f => {
               const changeAmount = f.changeShares * lc;
               const totalAmount = f.shares * lc;
-              const hasBuy = f.changeShares > 0;
+              let badgeClass = 'badge-amber';
+              let colorStyle = 'var(--text3)';
+              let sign = '';
+              if (f.changeShares > 0) {
+                badgeClass = 'badge-red';
+                colorStyle = 'var(--red)';
+                sign = '+';
+              } else if (f.changeShares < 0) {
+                badgeClass = 'badge-green';
+                colorStyle = 'var(--green)';
+                sign = '';
+              }
+              const amtColor = changeAmount > 0 ? 'var(--red)' : (changeAmount < 0 ? 'var(--green)' : 'var(--text3)');
+              const wtColor = f.changeWeight > 0 ? 'var(--red)' : (f.changeWeight < 0 ? 'var(--green)' : 'var(--text3)');
+              const amtSign = changeAmount > 0 ? '+' : '';
+              const wtSign = f.changeWeight > 0 ? '+' : '';
               return `
               <tr style="border-bottom:1px solid var(--border);">
                 <td style="padding:8px 10px; font-weight:600; color:var(--text);">${escapeHtml(f.etfName)} (${escapeHtml(f.etfCode)})</td>
-                <td style="padding:8px 10px;"><span class="badge ${hasBuy ? 'badge-red' : 'badge-green'}">${escapeHtml(f.action)}</span></td>
-                <td style="padding:8px 10px; text-align:right; font-weight:700; color:${hasBuy ? 'var(--red)' : 'var(--green)'}">
-                  <div>${hasBuy ? '+' : ''}${f.changeShares.toLocaleString()} 股</div>
-                  <div style="font-size:10px; font-weight:normal; opacity:.7; color:${changeAmount > 0 ? 'var(--red)' : 'var(--green)'}">${changeAmount > 0 ? '+' : ''}${fmtAmt(changeAmount)}</div>
+                <td style="padding:8px 10px;"><span class="badge ${badgeClass}">${escapeHtml(f.action)}</span></td>
+                <td style="padding:8px 10px; text-align:right; font-weight:700; color:${colorStyle};">
+                  <div>${sign}${f.changeShares.toLocaleString()} 股</div>
+                  <div style="font-size:10px; font-weight:normal; opacity:.7; color:${amtColor};">${amtSign}${fmtAmt(changeAmount)}</div>
                 </td>
-                <td style="padding:8px 10px; text-align:right; color:${f.changeWeight > 0 ? 'var(--red)' : 'var(--green)'}">${f.changeWeight > 0 ? '+' : ''}${f.changeWeight.toFixed(2)}%</td>
+                <td style="padding:8px 10px; text-align:right; color:${wtColor};">${wtSign}${f.changeWeight.toFixed(2)}%</td>
                 <td style="padding:8px 10px; text-align:right; color:var(--text2);">
                   <div>${f.shares.toLocaleString()} 股</div>
                   <div style="font-size:10px; opacity:.7;">${fmtAmt(totalAmount)}</div>
