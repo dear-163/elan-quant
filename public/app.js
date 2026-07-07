@@ -820,6 +820,32 @@ ${JSON.stringify(summaryData,null,2)}
 6. 請用繁體中文回答，格式使用 HTML（<h3><ul><li><p><strong>標籤），不要包含任何 markdown 或程式碼區塊標記`;
 }
 
+// Renders a {label: value|null} object as label/value rows (same visual language as the chip
+// panel), instead of a raw JSON dump — this data exists so a user can double-check the AI summary
+// against the real numbers, which only works if a non-technical reader can actually read it.
+function renderKeyValueRows(obj){
+  return Object.entries(obj).map(([k,v])=>
+    `<div class="ind-row"><span class="ind-name">${escapeHtml(k)}</span><span class="ind-val">${v==null?'<span style="color:var(--text3)">暫無資料</span>':escapeHtml(String(v))}</span></div>`
+  ).join('');
+}
+function renderSummaryRawData(summaryData){
+  const section=(title,data,isText)=>{
+    if(data.insufficient){
+      return `<div class="ind-card"><div class="ind-title">${title}</div><div style="color:var(--text3);font-size:13px;padding:6px 0">資料不足${data.說明?'：'+escapeHtml(data.說明):''}</div></div>`;
+    }
+    if(isText){
+      const text=Object.values(data)[0]||'';
+      return `<div class="ind-card"><div class="ind-title">${title}</div><div style="font-size:13px;line-height:1.8;white-space:pre-wrap;color:var(--text2)">${escapeHtml(text)}</div></div>`;
+    }
+    return `<div class="ind-card"><div class="ind-title">${title}</div>${renderKeyValueRows(data)}</div>`;
+  };
+  return `<div class="indicator-grid">
+    ${section('📈 技術面',summaryData.technical,true)}
+    ${section('🏢 基本面',summaryData.fundamental,false)}
+    ${section('💰 籌碼面',summaryData.chip,false)}
+    ${section('📊 市場情緒',summaryData.sentiment,false)}
+  </div>`;
+}
 async function runSummaryAnalysis(symbol,companyName,techSummary,chipData,sentimentData,info,gen){
   const summaryData=buildSummaryData(info,techSummary,chipData,sentimentData);
   const prompt=buildSummaryPrompt(symbol,companyName,summaryData);
@@ -827,7 +853,7 @@ async function runSummaryAnalysis(symbol,companyName,techSummary,chipData,sentim
   if(gen!=null&&gen!==analyzeGeneration) return;
   const rawEl=document.createElement('div');
   rawEl.className='fund-card';
-  rawEl.innerHTML=`<div class="fund-card-title">📎 原始數據（供核對 AI 摘要是否正確）</div><div class="fund-content" style="font-family:monospace;font-size:12px;white-space:pre-wrap">${escapeHtml(JSON.stringify(summaryData,null,2))}</div>`;
+  rawEl.innerHTML=`<div class="fund-card-title">📎 原始數據（供核對 AI 摘要是否正確）</div><div class="fund-content">${renderSummaryRawData(summaryData)}</div>`;
   document.getElementById('summaryContent').appendChild(rawEl);
 }
 
