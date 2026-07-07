@@ -80,18 +80,17 @@ async function analyze(){
     if(apiKey) runGeminiAnalysis(sym,companyName,techSummary);
 
     let chipData=null,sentimentData=null;
-    try{
-      chipData=await fetchChip(sym);
-      renderChip(chipData);
-    }catch(e){
-      document.getElementById('chipContent').innerHTML=`<div class="error-box">⚠ 籌碼面資料取得失敗：${escapeHtml(e.message)}</div>`;
-    }
-    try{
-      sentimentData=await fetchSentiment();
-      renderSentiment(sentimentData);
-    }catch(e){
-      document.getElementById('sentimentContent').innerHTML=`<div class="error-box">⚠ 市場情緒指數取得失敗：${escapeHtml(e.message)}</div>`;
-    }
+    // Chip and sentiment are independent data sources — fetch them concurrently instead of
+    // sequentially so the wait before rendering (and before the AI summary can start) is roughly
+    // halved, especially since chip.js does non-trivial work server-side (TDCC CSV parse + T86 calls).
+    await Promise.all([
+      fetchChip(sym).then(d=>{ chipData=d; renderChip(d); }).catch(e=>{
+        document.getElementById('chipContent').innerHTML=`<div class="error-box">⚠ 籌碼面資料取得失敗：${escapeHtml(e.message)}</div>`;
+      }),
+      fetchSentiment().then(d=>{ sentimentData=d; renderSentiment(d); }).catch(e=>{
+        document.getElementById('sentimentContent').innerHTML=`<div class="error-box">⚠ 市場情緒指數取得失敗：${escapeHtml(e.message)}</div>`;
+      }),
+    ]);
 
     if(apiKey){
       runSummaryAnalysis(sym,companyName,techSummary,chipData,sentimentData,info);
