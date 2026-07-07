@@ -112,9 +112,7 @@ async function analyze(){
     ]);
     if(myGen!==analyzeGeneration) return;
 
-    if(apiKey){
-      runSummaryAnalysis(sym,companyName,techSummary,chipData,sentimentData,info,myGen,data);
-    }
+    runSummaryAnalysis(sym,companyName,techSummary,chipData,sentimentData,info,myGen,data);
   }catch(e){
     if(myGen!==analyzeGeneration) return; // a newer call is already in charge of the UI
     document.getElementById('errorBox').innerHTML='⚠ <strong>'+escapeHtml(e.message).replace(/\n/g,'<br>')+'</strong>';
@@ -954,11 +952,16 @@ function renderSummaryRawData(summaryData){
 async function runSummaryAnalysis(symbol,companyName,techSummary,chipData,sentimentData,info,gen,data){
   const summaryData=buildSummaryData(info,techSummary,chipData,sentimentData,data);
   const prompt=buildSummaryPrompt(symbol,companyName,summaryData);
-  await streamGemini({prompt,model:selectedModel},'summaryContent','🧭 四面向綜合摘要',false,0,gen);
+  if(apiKey){
+    await streamGemini({prompt,model:selectedModel},'summaryContent','🧭 四面向綜合摘要',false,0,gen);
+  }else{
+    const needsKey='<div class="info-box">⚠️ 尚未設定 Gemini API Key，無法產生 AI 綜合摘要。請點上方「🔑 使用自己的 API Key」進行設定。</div>';
+    document.getElementById('summaryContent').innerHTML=needsKey;
+  }
   if(gen!=null&&gen!==analyzeGeneration) return;
   const rawEl=document.createElement('div');
   rawEl.className='fund-card';
-  rawEl.innerHTML=`<div class="fund-card-title">📎 原始數據（供核對 AI 摘要是否正確）</div><div class="fund-content">${renderSummaryRawData(summaryData)}</div>`;
+  rawEl.innerHTML=`<div class="fund-card-title">📎 原始數據（供核對與參考）</div><div class="fund-content">${renderSummaryRawData(summaryData)}</div>`;
   document.getElementById('summaryContent').appendChild(rawEl);
 }
 
