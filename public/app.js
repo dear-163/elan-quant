@@ -570,7 +570,11 @@ async function streamGemini(payload,targetId,cardTitle,append,retryCount=0){
           return streamGemini(payload,targetId,cardTitle,append,retryCount+1);
         }
         if(limitNum&&/free_tier_requests/i.test(errMsg)){
-          throw new Error(`此模型今日免費額度（每日 ${limitNum} 次）可能已用完，請明天再試，或在上方切換其他 AI 模型（例如 3.1 Flash-Lite）。`);
+          // Suggest an actually different model — if the visitor is already on Flash-Lite (the model
+          // that just ran out), telling them to "switch to Flash-Lite" would be nonsensical.
+          const usedModel=payload.model||selectedModel;
+          const altSuggestion=usedModel==='gemini-3.1-flash-lite'?'3.5 Flash 或 3.5 Pro':'3.1 Flash-Lite';
+          throw new Error(`此模型今日免費額度（每日 ${limitNum} 次）可能已用完，請明天再試，或在上方切換其他 AI 模型（例如 ${altSuggestion}）。`);
         }
         throw new Error('AI 服務持續忙碌，請等待1-2分鐘後重新分析。');
       }
