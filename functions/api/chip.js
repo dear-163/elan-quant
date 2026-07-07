@@ -1,8 +1,11 @@
 // 籌碼面：融資融券、大戶持股結構、三大法人買賣超。
 // 全部即時查詢官方來源（不強制依賴 D1），每個欄位都帶 {value, source, date}，
-// 任何一段抓取失敗就回傳 {error: 完整錯誤訊息}，前端顯示「暫無資料」，不吞錯誤、不補假數字。
 const SYMBOL_RE = /^[A-Za-z0-9.\-]{1,15}$/;
-const BROWSER_HEADERS = { 'Accept': 'application/json', 'User-Agent': 'Mozilla/5.0 (compatible; ElanQuant/1.0)' };
+const BROWSER_HEADERS = { 
+  'Accept': 'application/json', 
+  'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+  'Referer': 'https://www.tpex.org.tw/'
+};
 
 function json(obj, status = 200, extraHeaders = {}) {
   return new Response(JSON.stringify(obj), { status, headers: { 'Content-Type': 'application/json', ...extraHeaders } });
@@ -182,12 +185,14 @@ async function fetchInstitutionalFlow(stockCode) {
   }
 }
 
-// 上櫃(TPEx)股票的融資融券/三大法人資料源跟上市(TWSE)完全不同——這是分開的交易所系統。
-// tpex_3insti_daily_trading 不支援指定日期查詢(只給最新一天)，跟 TWSE 的 T86 不一樣，
-// 所以上櫃股票只能顯示「當日」三大法人買賣超，沒辦法像上市股票一樣算「近5日」累計。
-async function fetchMarginTpex(stockCode) {
+async function fetchTpexOpenApi(url, env) {
+  const targetUrl = env?.TPEX_PROXY_URL ? `${env.TPEX_PROXY_URL}?url=${encodeURIComponent(url)}` : url;
+  return await fetch(targetUrl, { headers: BROWSER_HEADERS });
+}
+
+async function fetchMarginTpex(stockCode, env) {
   try {
-    const res = await fetch('https://www.tpex.org.tw/openapi/v1/tpex_mainboard_margin_balance', { headers: BROWSER_HEADERS });
+    const res = await fetchTpexOpenApi('https://www.tpex.org.tw/openapi/v1/tpex_mainboard_margin_balance', env);
     if (!res.ok) return { error: `TPEx tpex_mainboard_margin_balance 請求失敗：HTTP ${res.status}` };
     const arr = await res.json();
     if (!Array.isArray(arr)) return { error: 'TPEx tpex_mainboard_margin_balance 回應格式不是陣列，可能是端點已變更' };
@@ -206,13 +211,16 @@ async function fetchMarginTpex(stockCode) {
       shortToMarginRatio: { value: (shortBalance != null && marginBalance) ? shortBalance / marginBalance : null, source, date: isoDate },
     };
   } catch (e) {
+    if (e.message.includes('Too many redirects') || e.message.includes('redirect')) {
+      return { error: '櫃買中心 WAF 阻擋了 Cloudflare 節點請求（Too many redirects）。若需在上線環境查詢上櫃股票，請設定 TPEX_PROXY_URL 代理。' };
+    }
     return { error: `TPEx tpex_mainboard_margin_balance 請求發生例外：${e.message}` };
   }
 }
 
-async function fetchInstitutionalFlowTpex(stockCode) {
+async function fetchInstitutionalFlowTpex(stockCode, env) {
   try {
-    const res = await fetch('https://www.tpex.org.tw/openapi/v1/tpex_3insti_daily_trading', { headers: BROWSER_HEADERS });
+    const res = await fetchTpexOpenApi('https://www.tpex.org.tw/openapi/v1/tpex_3insti_daily_trading', env);
     if (!res.ok) return { error: `TPEx tpex_3insti_daily_trading 請求失敗：HTTP ${res.status}` };
     const arr = await res.json();
     if (!Array.isArray(arr)) return { error: 'TPEx tpex_3insti_daily_trading 回應格式不是陣列，可能是端點已變更' };
@@ -221,18 +229,18 @@ async function fetchInstitutionalFlowTpex(stockCode) {
     const parseNum = v => { const n = parseFloat(String(v ?? '').replace(/,/g, '')); return isFinite(n) ? n : null; };
     const isoDate = isoFromRocOrAd(row['Date']);
     const source = 'TPEx tpex_3insti_daily_trading';
-    // TPEx's own field naming is inconsistent between exports — verified by inspecting a real
-    // response: the "Difference" key has a stray space ("...Include MainlandAreaInvestors...")
-    // that the "TotalBuy"/"TotalSell" keys for the same field don't have. Try both forms.
     const foreignDiff = row['ForeignInvestorsIncludeMainlandAreaInvestors-Difference'] ?? row['ForeignInvestorsInclude MainlandAreaInvestors-Difference'];
     return {
       period: '當日（上櫃僅提供單日資料，非近5日累計）',
       foreignNet5d: { value: parseNum(foreignDiff), source, date: isoDate },
       trustNet5d: { value: parseNum(row['SecuritiesInvestmentTrustCompanies-Difference']), source, date: isoDate },
       dealerNet5d: { value: parseNum(row['Dealers-Difference']), source, date: isoDate },
-      foreignConsecutiveDays: null, // needs multi-day history, not available from this single-day endpoint
+      foreignConsecutiveDays: null,
     };
   } catch (e) {
+    if (e.message.includes('Too many redirects') || e.message.includes('redirect')) {
+      return { error: '櫃買中心 WAF 阻擋了 Cloudflare 節點請求（Too many redirects）。若需在上線環境查詢上櫃股票，請設定 TPEX_PROXY_URL 代理。' };
+    }
     return { error: `TPEx tpex_3insti_daily_trading 請求發生例外：${e.message}` };
   }
 }
@@ -258,9 +266,9 @@ export async function onRequestGet(context) {
   let margin, holders, institutional;
   if (isTpex) {
     [margin, holders, institutional] = await Promise.all([
-      fetchMarginTpex(stockCode),
+      fetchMarginTpex(stockCode, env),
       fetchHolderDistribution(stockCode, env),
-      fetchInstitutionalFlowTpex(stockCode),
+      fetchInstitutionalFlowTpex(stockCode, env),
     ]);
   } else {
     [margin, holders, institutional] = await Promise.all([
@@ -272,8 +280,8 @@ export async function onRequestGet(context) {
                              (institutional.error && institutional.error.includes('找不到股票代號'));
     if (isNotFoundOnTwse) {
       const [marginTpex, institutionalTpex] = await Promise.all([
-        fetchMarginTpex(stockCode),
-        fetchInstitutionalFlowTpex(stockCode),
+        fetchMarginTpex(stockCode, env),
+        fetchInstitutionalFlowTpex(stockCode, env),
       ]);
       if (!marginTpex.error || !institutionalTpex.error) {
         margin = marginTpex;

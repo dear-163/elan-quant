@@ -1,7 +1,11 @@
 const CANDLE_INTERVAL = { '3mo':'1d', '6mo':'1d', '1y':'1d', '2y':'1wk' };
 const NON_US_SUFFIX = /\.(TW|TWO|HK|L|T|SS|SZ|KS|AX|TO|PA|DE|MI|MC|AS|SI|BO|NS)$/i;
 const SYMBOL_RE = /^[A-Za-z0-9.\-]{1,15}$/;
-const BROWSER_HEADERS = { 'Accept':'application/json', 'User-Agent':'Mozilla/5.0 (compatible; ElanQuant/1.0)' };
+const BROWSER_HEADERS = { 
+  'Accept': 'application/json', 
+  'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+  'Referer': 'https://www.tpex.org.tw/'
+};
 
 function json(obj, status = 200, extraHeaders = {}) {
   return new Response(JSON.stringify(obj), { status, headers: { 'Content-Type':'application/json', ...extraHeaders } });
@@ -135,7 +139,7 @@ async function fetchQuoteInfo(symbol, chartMeta, env, userFmpKey) {
     const twse = await fetchTwseInfo(symbol, base);
     if (twse) return twse;
   } else if (/\.TWO$/i.test(symbol)) {
-    const tpex = await fetchTpexInfo(symbol, base);
+    const tpex = await fetchTpexInfo(symbol, base, env);
     if (tpex) return tpex;
   }
 
@@ -380,13 +384,18 @@ async function fetchTwseInfo(symbol, base) {
   }
 }
 
+async function fetchTpexOpenApi(url, env) {
+  const targetUrl = env?.TPEX_PROXY_URL ? `${env.TPEX_PROXY_URL}?url=${encodeURIComponent(url)}` : url;
+  return await fetch(targetUrl, { headers: BROWSER_HEADERS });
+}
+
 // TPEx (上櫃) open data: https://www.tpex.org.tw/openapi/
-async function fetchTpexInfo(symbol, base) {
+async function fetchTpexInfo(symbol, base, env) {
   try {
     const stockNo = symbol.replace(/\.TWO?$/i, '');
     const [dayRes, peRes] = await Promise.all([
-      fetch('https://www.tpex.org.tw/openapi/v1/tpex_mainboard_daily_close_quotes'),
-      fetch('https://www.tpex.org.tw/openapi/v1/tpex_mainboard_peratio_analysis'),
+      fetchTpexOpenApi('https://www.tpex.org.tw/openapi/v1/tpex_mainboard_daily_close_quotes', env),
+      fetchTpexOpenApi('https://www.tpex.org.tw/openapi/v1/tpex_mainboard_peratio_analysis', env),
     ]);
     if (!dayRes.ok) return null;
     const dayArr = await dayRes.json();
