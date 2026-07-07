@@ -1,4 +1,5 @@
 const CANDLE_INTERVAL = { '3mo':'1d', '6mo':'1d', '1y':'1d', '2y':'1wk' };
+const VALID_INTERVALS = ['1d', '1wk', '1mo'];
 const NON_US_SUFFIX = /\.(TW|TWO|HK|L|T|SS|SZ|KS|AX|TO|PA|DE|MI|MC|AS|SI|BO|NS)$/i;
 const SYMBOL_RE = /^[A-Za-z0-9.\-]{1,15}$/;
 const BROWSER_HEADERS = { 
@@ -17,6 +18,8 @@ export async function onRequestGet(context) {
   const symbol = (url.searchParams.get('symbol') || '').trim().toUpperCase();
   const periodParam = url.searchParams.get('period') || '3mo';
   const period = CANDLE_INTERVAL[periodParam] ? periodParam : '3mo';
+  const intervalParam = url.searchParams.get('interval') || '';
+  const interval = VALID_INTERVALS.includes(intervalParam) ? intervalParam : (CANDLE_INTERVAL[period] || '1d');
   const userFmpKey = (url.searchParams.get('fmpKey') || '').trim();
 
   if (!SYMBOL_RE.test(symbol)) {
@@ -24,34 +27,34 @@ export async function onRequestGet(context) {
   }
 
   const cache = caches.default;
-  const cacheKey = new Request(`https://elan-quant-cache.internal/quote/${symbol}/${period}`, { method: 'GET' });
+  const cacheKey = new Request(`https://elan-quant-cache.internal/quote/${symbol}/${period}/${interval}`, { method: 'GET' });
   const cached = await cache.match(cacheKey);
   if (cached) return cached;
 
   let resolvedSymbol = symbol;
-  let candles = await fetchYahooCandles(symbol, period);
+  let candles = await fetchYahooCandles(symbol, period, interval);
   if (!candles || candles.length < 5) {
     if (/^\d{4,6}$/.test(symbol)) {
       const twSymbol = `${symbol}.TW`;
-      candles = await fetchYahooCandles(twSymbol, period);
+      candles = await fetchYahooCandles(twSymbol, period, interval);
       if (candles && candles.length >= 5) {
         resolvedSymbol = twSymbol;
       } else {
         const twoSymbol = `${symbol}.TWO`;
-        candles = await fetchYahooCandles(twoSymbol, period);
+        candles = await fetchYahooCandles(twoSymbol, period, interval);
         if (candles && candles.length >= 5) {
           resolvedSymbol = twoSymbol;
         }
       }
     } else if (/\.TW$/i.test(symbol)) {
       const alternativeSymbol = symbol.replace(/\.TW$/i, '.TWO');
-      candles = await fetchYahooCandles(alternativeSymbol, period);
+      candles = await fetchYahooCandles(alternativeSymbol, period, interval);
       if (candles && candles.length >= 5) {
         resolvedSymbol = alternativeSymbol;
       }
     } else if (/\.TWO$/i.test(symbol)) {
       const alternativeSymbol = symbol.replace(/\.TWO$/i, '.TW');
-      candles = await fetchYahooCandles(alternativeSymbol, period);
+      candles = await fetchYahooCandles(alternativeSymbol, period, interval);
       if (candles && candles.length >= 5) {
         resolvedSymbol = alternativeSymbol;
       }
@@ -73,8 +76,8 @@ export async function onRequestGet(context) {
   return response;
 }
 
-async function fetchYahooCandles(symbol, period) {
-  const interval = CANDLE_INTERVAL[period] || '1d';
+async function fetchYahooCandles(symbol, period, interval) {
+  interval = interval || CANDLE_INTERVAL[period] || '1d';
   for (const host of ['query1.finance.yahoo.com', 'query2.finance.yahoo.com']) {
     try {
       const target = `https://${host}/v8/finance/chart/${encodeURIComponent(symbol)}?range=${period}&interval=${interval}&events=div&includePrePost=false`;

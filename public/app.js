@@ -1,4 +1,4 @@
-let currentPeriod='3mo', currentSymbol='', selectedModel='gemini-3.5-flash';
+let currentPeriod='3mo', currentInterval='1d', currentSymbol='', selectedModel='gemini-3.5-flash';
 let apiKey='', fmpKey='';
 let priceChart=null, rsiChart=null, macdChart=null;
 // Bumped on every analyze() call. Quick-load tags and the Enter-key handler both call analyze()
@@ -46,6 +46,13 @@ function setPeriod(p,btn){
   btn.classList.add('active');
   if(currentSymbol) analyze();
 }
+function setCandleInterval(iv,btn){
+  currentInterval=iv;
+  persistSet('elan_last_interval', iv);
+  document.querySelectorAll('.interval-row .btn-ghost').forEach(b=>b.classList.remove('active'));
+  btn.classList.add('active');
+  if(currentSymbol) analyze();
+}
 function quickLoad(sym){document.getElementById('symbolInput').value=sym;analyze();}
 
 async function analyze(){
@@ -74,9 +81,10 @@ async function analyze(){
 
   try{
     document.getElementById('loadingText').textContent='正在抓取股價數據⋯';
-    const {data,info}=await fetchQuote(sym,currentPeriod);
+    const {data,info}=await fetchQuote(sym,currentPeriod,currentInterval);
     if(myGen!==analyzeGeneration) return; // superseded by a newer analyze() call while this was in flight
-    if(!data||data.length<20) throw new Error('數據不足（台股請加 .TW，例如 2330.TW）');
+    const minBars=currentInterval==='1wk'?10:20;
+    if(!data||data.length<minBars) throw new Error('數據不足（台股請加 .TW，例如 2330.TW；若已選週線，可嘗試拉長時間區間或改回日線）');
 
     document.getElementById('loadingText').textContent='正在計算技術指標⋯';
     renderTech(sym,data,info);
@@ -123,8 +131,8 @@ async function analyze(){
   }
 }
 
-async function fetchQuote(symbol,period){
-  let url=`/api/quote?symbol=${encodeURIComponent(symbol)}&period=${encodeURIComponent(period)}`;
+async function fetchQuote(symbol,period,interval){
+  let url=`/api/quote?symbol=${encodeURIComponent(symbol)}&period=${encodeURIComponent(period)}&interval=${encodeURIComponent(interval||'1d')}`;
   if(fmpKey) url+=`&fmpKey=${encodeURIComponent(fmpKey)}`;
   const res=await fetch(url);
   const body=await res.json().catch(()=>({}));
@@ -974,6 +982,7 @@ function persistGet(k,def){ try{ const raw=localStorage.getItem(k); return raw?J
 function loadPersistedSettings(){
   const savedSymbol=persistGet('elan_last_symbol','');
   const savedPeriod=persistGet('elan_last_period','3mo');
+  const savedInterval=persistGet('elan_last_interval','1d');
   const savedApiKey=persistGet('elan_gemini_key','');
   const savedFmpKey=persistGet('elan_fmp_key','');
   if(savedApiKey){ apiKey=savedApiKey; document.getElementById('keyStatus').textContent='✓ 已設定'; document.getElementById('keyStatus').className='key-status key-set'; }
@@ -985,6 +994,13 @@ function loadPersistedSettings(){
       else if(b.textContent.includes('6個月')&&savedPeriod==='6mo')b.classList.add('active');
       else if(b.textContent.includes('1年')&&savedPeriod==='1y')b.classList.add('active');
       else if(b.textContent.includes('2年')&&savedPeriod==='2y')b.classList.add('active');
+      else b.classList.remove('active');
+    });
+  }
+  if(savedInterval){ currentInterval=savedInterval;
+    document.querySelectorAll('.interval-row .btn-ghost').forEach(b=>{
+      if(b.textContent.includes('日線')&&savedInterval==='1d')b.classList.add('active');
+      else if(b.textContent.includes('週線')&&savedInterval==='1wk')b.classList.add('active');
       else b.classList.remove('active');
     });
   }

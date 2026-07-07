@@ -21,6 +21,11 @@
     <button class="btn-ghost" onclick="setPeriod('1y',this)">1年</button>
     <button class="btn-ghost" onclick="setPeriod('2y',this)">2年</button>
   </div>
+  <div class="interval-row">
+    <span class="adv-label" style="margin-right:4px">K棒週期</span>
+    <button class="btn-ghost active" onclick="setCandleInterval('1d',this)">日線</button>
+    <button class="btn-ghost" onclick="setCandleInterval('1wk',this)">週線</button>
+  </div>
   <div class="model-row">
     🤖 AI 模型
     <select id="modelSelect" class="model-select">
