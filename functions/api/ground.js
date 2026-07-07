@@ -6,8 +6,8 @@ const SECTIONS = new Set(['fundamentals', 'valuation', 'risk', 'conclusion']);
 const NON_US_SUFFIX = /\.(TW|TWO|HK|L|T|SS|SZ|KS|AX|TO|PA|DE|MI|MC|AS|SI|BO|NS)$/i;
 const SYMBOL_RE = /^[A-Za-z0-9.\-]{1,15}$/;
 
-function json(obj, status = 200) {
-  return new Response(JSON.stringify(obj), { status, headers: { 'Content-Type': 'application/json' } });
+function json(obj, status = 200, extraHeaders = {}) {
+  return new Response(JSON.stringify(obj), { status, headers: { 'Content-Type': 'application/json', ...extraHeaders } });
 }
 
 function fmtLargeNum(v) {
@@ -73,23 +73,43 @@ export async function onRequestGet(context) {
     return json({ error: '請求參數不正確' }, 400);
   }
 
+  // Income statements and peer comps only change quarterly at most — cache generously (1h) to
+  // conserve FMP's 250/day free-tier quota across repeat lookups of the same symbol+section.
+  const cache = caches.default;
+  const cacheKey = new Request(`https://elan-quant-cache.internal/ground/${symbol}/${section}`, { method: 'GET' });
+  const cached = await cache.match(cacheKey);
+  if (cached) return cached;
+
   const isNonUS = NON_US_SUFFIX.test(symbol);
+  let body;
+  let gotRealData = false;
 
   if (section === 'fundamentals') {
     const fin = (fmpKey && !isNonUS) ? await fetchFinancialsSummary(symbol, fmpKey) : null;
-    return json({
+    gotRealData = !!fin;
+    body = {
       groundingText: fin
         ? `\n\n【近3年財報數據（來源：FMP，真實數據，請優先採用，不要自行編造不同數字）】\n${fin}`
         : `\n\n（註：目前無法取得近3年真實財報數據，請在財務健康段落明確註明此處為一般產業知識推論，並提醒使用者自行查證財報。）`,
-    });
-  }
-  if (section === 'valuation') {
+    };
+  } else if (section === 'valuation') {
     const peers = (fmpKey && !isNonUS) ? await fetchPeersSummary(symbol, fmpKey) : null;
-    return json({
+    gotRealData = !!peers;
+    body = {
       groundingText: peers
         ? `\n\n【同業比較數據（來源：FMP，真實數據，請優先採用，不要自行編造不同公司或數字）】\n${peers}`
         : `\n\n（註：目前無法取得真實同業比較數據，請在估值比較表格明確註明這是一般產業知識推論的參考數字，並提醒使用者自行查證。）`,
-    });
+    };
+  } else {
+    body = { groundingText: '' };
   }
-  return json({ groundingText: '' });
+
+  // Only cache genuine FMP-sourced hits. If no key was available this time (e.g. a visitor without
+  // their own FMP BYOK key), skip caching entirely — otherwise the "no real data" fallback text would
+  // get stuck for an hour and block a *different* visitor who does have a valid key from that point on.
+  const response = json(body, 200, gotRealData ? { 'Cache-Control': 'public, max-age=3600' } : {});
+  if (gotRealData) {
+    context.waitUntil(cache.put(cacheKey, response.clone()));
+  }
+  return response;
 }
