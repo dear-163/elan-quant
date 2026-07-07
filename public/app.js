@@ -113,7 +113,7 @@ async function analyze(){
     if(myGen!==analyzeGeneration) return;
 
     if(apiKey){
-      runSummaryAnalysis(sym,companyName,techSummary,chipData,sentimentData,info,myGen);
+      runSummaryAnalysis(sym,companyName,techSummary,chipData,sentimentData,info,myGen,data);
     }
   }catch(e){
     if(myGen!==analyzeGeneration) return; // a newer call is already in charge of the UI
@@ -194,27 +194,63 @@ function sigBadge(s){
   return`<span class="badge ${cls}">${txt}</span>`;
 }
 
+function calcTechSignals(data, info) {
+  const c = data.map(d => d.close);
+  const rsi = calcRSI(c);
+  const { macdLine, signal, hist } = calcMACD(c);
+  const bb = calcBB(c);
+  const { K, D } = calcKD(data);
+  const ma5 = sma(c, 5), ma20 = sma(c, 20);
+  
+  const lc = c[c.length - 1];
+  const lRSI = last(rsi), lK = last(K), lD = last(D), lBB = bb.filter(v => v.upper != null).slice(-1)[0];
+  const lMA5 = last(ma5), lMA20 = last(ma20);
+  const lMACD = last(macdLine), lSig = last(signal);
+  
+  const sig = {};
+  sig.ma = lMA5 > lMA20 ? 'BUY' : 'SELL';
+  sig.rsi = lRSI > 70 ? 'OVERBOUGHT' : lRSI < 30 ? 'OVERSOLD' : 'NEUTRAL';
+  sig.macd = lMACD > lSig ? 'BUY' : 'SELL';
+  sig.kd = lK > 80 ? 'OVERBOUGHT' : lK < 20 ? 'OVERSOLD' : (lK > lD ? 'BUY' : 'SELL');
+  sig.bb = lc > lBB?.upper ? 'OVERBOUGHT' : lc < lBB?.lower ? 'OVERSOLD' : 'NEUTRAL';
+  
+  const buys = [sig.ma, sig.macd, sig.kd].filter(s => s === 'BUY').length;
+  const sells = [sig.ma, sig.macd, sig.kd].filter(s => s === 'SELL').length;
+  const ob = [sig.rsi, sig.kd, sig.bb].filter(s => s === 'OVERBOUGHT').length;
+  const os = [sig.rsi, sig.kd, sig.bb].filter(s => s === 'OVERSOLD').length;
+  
+  let oSig = '中性觀望', oClass = 'NEUTRAL', oSub = '技術指標分歧，建議持續觀察';
+  if (ob >= 2) { oSig = '偏高警示'; oClass = 'SELL'; oSub = '多項指標超買，留意回檔風險'; }
+  else if (os >= 2) { oSig = '超賣機會'; oClass = 'BUY'; oSub = '多項指標超賣，注意反彈訊號'; }
+  else if (buys >= 2) { oSig = '偏多訊號'; oClass = 'BUY'; oSub = '趨勢與動能指標偏向買方'; }
+  else if (sells >= 2) { oSig = '偏空訊號'; oClass = 'SELL'; oSub = '趨勢與動能指標偏向賣方'; }
+  
+  return { sig, oSig, oClass, oSub, lRSI, lK, lD, lMACD, lSig, lHist: last(hist), lMA5, lMA20, lBB };
+}
+
 function buildTechSummary(sym,data,info){
   const c=data.map(d=>d.close);
-  const rsi=calcRSI(c),{macdLine,signal,hist}=calcMACD(c),bb=calcBB(c),{K,D}=calcKD(data);
-  const ma5=sma(c,5),ma20=sma(c,20),ma60=sma(c,60);
   const lc=c[c.length-1],pc=c[c.length-2]??lc;
   const allHighs=data.map(d=>d.high).filter(Boolean);
   const allLows=data.map(d=>d.low).filter(Boolean);
   const h52=info.fiftyTwoWeekHigh||(allHighs.length?Math.max(...allHighs).toFixed(2):'N/A');
   const l52=info.fiftyTwoWeekLow||(allLows.length?Math.min(...allLows).toFixed(2):'N/A');
   const fmtPct=v=>v!=null?(v*100).toFixed(1)+'%':'N/A';
+  
+  const signals=calcTechSignals(data,info);
+  
   return `股票：${sym}（${info.longName||sym}）
 收盤價：${lc.toFixed(2)} ${info.currency||''}，日漲跌：${((lc-pc)/pc*100).toFixed(2)}%
+整體技術訊號：${signals.oSig}（${signals.oSub}）
 52週高/低：${h52} / ${l52}
 市值：${info.marketCap?Number(info.marketCap).toLocaleString():'N/A'}
 本益比(TTM)：${info.trailingPE||'N/A'}，預估本益比：${info.forwardPE||'N/A'}
 EPS：${info.trailingEps||'N/A'}，殖利率：${info.dividendYield?(info.dividendYield*100).toFixed(2)+'%':'N/A'}
 毛利率：${fmtPct(info.grossMargins)}，營業利益率：${fmtPct(info.operatingMargins)}
-RSI(14)=${fmt(last(rsi),1)}，K=${fmt(last(K),1)} D=${fmt(last(D),1)}
-MACD=${fmt(last(macdLine),4)}，Signal=${fmt(last(signal),4)}，Hist=${fmt(last(hist),4)}
-MA5=${fmt(last(ma5))} MA20=${fmt(last(ma20))} MA60=${fmt(last(ma60))}
-布林上軌=${fmt(bb.filter(b=>b.upper!=null).slice(-1)[0]?.upper)} 下軌=${fmt(bb.filter(b=>b.lower!=null).slice(-1)[0]?.lower)}
+RSI(14)=${fmt(signals.lRSI,1)}，K=${fmt(signals.lK,1)} D=${fmt(signals.lD,1)}
+MACD=${fmt(signals.lMACD,4)}，Signal=${fmt(signals.lSig,4)}，Hist=${fmt(signals.lHist,4)}
+MA5=${fmt(signals.lMA5)} MA20=${fmt(signals.lMA20)}
+布林上軌=${fmt(signals.lBB?.upper)} 下軌=${fmt(signals.lBB?.lower)}
 產業：${info.sector||'N/A'} / ${info.industry||'N/A'}
 分析師評級：${info.analystRating||'N/A'}
 ${info.description?'公司簡介：'+info.description.slice(0,300)+'...':''}`;
@@ -272,28 +308,12 @@ function buildSRBox(lc,lBB,r1,r2,s1,s2,pivot,pivR1,pivR2,pivS1,pivS2,h52,l52,chg
 
 function renderTech(symbol,data,info){
   const c=data.map(d=>d.close);
-  const labels=data.map(d=>d.date.toLocaleDateString('zh-TW',{month:'short',day:'numeric'}));
-  const ma5=sma(c,5),ma10=sma(c,10),ma20=sma(c,20),ma60=sma(c,60);
-  const rsi=calcRSI(c),{macdLine,signal:sig2,hist}=calcMACD(c),bb=calcBB(c),{K,D}=calcKD(data);
+  const ma10=sma(c,10),ma60=sma(c,60);
+  const lMA10=last(ma10),lMA60=last(ma60);
   const lc=c[c.length-1],pc=c[c.length-2]??lc,chg=lc-pc,chgPct=chg/pc*100;
-  const lRSI=last(rsi),lMACD=last(macdLine),lSig=last(sig2),lHist=last(hist);
-  const lK=last(K),lD=last(D),lBB=bb.filter(v=>v.upper!=null).slice(-1)[0];
-  const lMA5=last(ma5),lMA10=last(ma10),lMA20=last(ma20),lMA60=last(ma60);
-  const sig={};
-  sig.ma=lMA5>lMA20?'BUY':'SELL';
-  sig.rsi=lRSI>70?'OVERBOUGHT':lRSI<30?'OVERSOLD':'NEUTRAL';
-  sig.macd=lMACD>lSig?'BUY':'SELL';
-  sig.kd=lK>80?'OVERBOUGHT':lK<20?'OVERSOLD':(lK>lD?'BUY':'SELL');
-  sig.bb=lc>lBB?.upper?'OVERBOUGHT':lc<lBB?.lower?'OVERSOLD':'NEUTRAL';
-  const buys=[sig.ma,sig.macd,sig.kd].filter(s=>s==='BUY').length;
-  const sells=[sig.ma,sig.macd,sig.kd].filter(s=>s==='SELL').length;
-  const ob=[sig.rsi,sig.kd,sig.bb].filter(s=>s==='OVERBOUGHT').length;
-  const os=[sig.rsi,sig.kd,sig.bb].filter(s=>s==='OVERSOLD').length;
-  let oSig='中性觀望',oClass='NEUTRAL',oSub='技術指標分歧，建議持續觀察';
-  if(ob>=2){oSig='偏高警示';oClass='SELL';oSub='多項指標超買，留意回檔風險';}
-  else if(os>=2){oSig='超賣機會';oClass='BUY';oSub='多項指標超賣，注意反彈訊號';}
-  else if(buys>=2){oSig='偏多訊號';oClass='BUY';oSub='趨勢與動能指標偏向買方';}
-  else if(sells>=2){oSig='偏空訊號';oClass='SELL';oSub='趨勢與動能指標偏向賣方';}
+  
+  const signals=calcTechSignals(data,info);
+  const {sig,oSig,oClass,oSub,lRSI,lK,lD,lMACD,lSig,lHist,lMA5,lMA20,lBB}=signals;
   const cn=info.longName||info.shortName||symbol,cur=info.currency||'';
   const fmtVol=v=>v&&v>0?(v>=1e9?(v/1e9).toFixed(1)+'B':v>=1e6?(v/1e6).toFixed(1)+'M':Number(v).toLocaleString()):'N/A';
   const fmtCap=v=>v&&v>0?(v>=1e12?(v/1e12).toFixed(2)+'T':v>=1e9?(v/1e9).toFixed(1)+'B':(v/1e6).toFixed(0)+'M'):'N/A';
@@ -793,7 +813,7 @@ function renderSentiment(data){
 }
 
 // ---- AI 綜合摘要（技術面＋基本面＋籌碼面＋市場情緒）----
-function buildSummaryData(info,techSummary,chipData,sentimentData){
+function buildSummaryData(info,techSummary,chipData,sentimentData,data){
   const fundamental={
     本益比:info.trailingPE??null, 預估本益比:info.forwardPE??null, 股價淨值比:info.priceToBook??null,
     殖利率:info.dividendYield!=null?(info.dividendYield*100).toFixed(2)+'%':null,
@@ -839,8 +859,28 @@ function buildSummaryData(info,techSummary,chipData,sentimentData){
     sentimentInsufficient=sentimentData.greedIndex==null;
   }
 
+  let technical=null,technicalInsufficient=true;
+  if(data&&data.length>0){
+    try{
+      const sigs=calcTechSignals(data,info);
+      technical={
+        整體技術訊號:sigs.oSig,
+        訊號解讀:sigs.oSub,
+        均線排列:sigs.sig.ma==='BUY'?'多頭排列':'空頭排列',
+        MACD狀態:sigs.sig.macd==='BUY'?'黃金交叉':'死亡交叉',
+        'RSI (14)':sigs.lRSI?sigs.lRSI.toFixed(1):'N/A',
+        'KD (9,3,3)':sigs.lK&&sigs.lD?`${sigs.lK.toFixed(1)} / ${sigs.lD.toFixed(1)}`:'N/A',
+      };
+      technicalInsufficient=false;
+    }catch{}
+  }
+  if(technicalInsufficient&&techSummary){
+    technical={原始技術面摘要:techSummary};
+    technicalInsufficient=false;
+  }
+
   return{
-    technical: techSummary?{原始技術面摘要:techSummary}:{insufficient:true},
+    technical: technicalInsufficient?{insufficient:true}:technical,
     fundamental: fundamentalInsufficient?{insufficient:true}:fundamental,
     chip: chipInsufficient?{insufficient:true}:chip,
     sentiment: sentimentInsufficient?{insufficient:true,說明:sentimentData?.maturityMessage||null}:sentiment,
@@ -863,37 +903,46 @@ ${JSON.stringify(summaryData,null,2)}
 3. 如果任一面向的物件包含 "insufficient": true，直接說明「此面向資料不足，暫無法判讀」，不要用其他面向的資料去補推測
 4. 最後加一段：「以上僅為數據現況整理，不構成投資建議，請自行判斷或諮詢專業意見」
 5. 四個面向之間如果出現矛盾訊號（例如技術面偏多但籌碼面顯示融資異常增加），要明確點出這個矛盾，不要為了寫出「一致的結論」而選擇性忽略某一面向的數據
-6. 請用繁體中文回答，格式使用 HTML（<h3><ul><li><p><strong>標籤），不要包含任何 markdown 或程式碼區塊標記`;
+6. 請用繁體中文回答，格式使用 HTML（<h3><ul><li><p><strong>標籤），不要包含 any markdown or code blocks`;
 }
 
 // Renders a {label: value|null} object as label/value rows (same visual language as the chip
 // panel), instead of a raw JSON dump — this data exists so a user can double-check the AI summary
 // against the real numbers, which only works if a non-technical reader can actually read it.
 function renderKeyValueRows(obj){
-  return Object.entries(obj).map(([k,v])=>
-    `<div class="ind-row"><span class="ind-name">${escapeHtml(k)}</span><span class="ind-val">${v==null?'<span style="color:var(--text3)">暫無資料</span>':escapeHtml(String(v))}</span></div>`
-  ).join('');
+  return Object.entries(obj).map(([k,v])=> {
+    let extraStyle = '';
+    if (k === '整體技術訊號' || k === '分級') {
+      if (v === '偏多訊號' || v === '超賣機會' || v === '極度恐慌' || v === '恐慌') {
+        extraStyle = 'style="color:var(--green);font-weight:bold"';
+      } else if (v === '偏高警示' || v === '偏空訊號' || v === '極度貪婪' || v === '貪婪') {
+        extraStyle = 'style="color:var(--red);font-weight:bold"';
+      } else if (v === '中性觀望' || v === '中性') {
+        extraStyle = 'style="color:var(--amber);font-weight:bold"';
+      }
+    }
+    return `<div class="ind-row"><span class="ind-name">${escapeHtml(k)}</span><span ${extraStyle} class="ind-val">${v==null?'<span style="color:var(--text3)">暫無資料</span>':escapeHtml(String(v))}</span></div>`;
+  }).join('');
 }
 function renderSummaryRawData(summaryData){
-  const section=(title,data,isText)=>{
+  const section=(title,data)=>{
     if(data.insufficient){
       return `<div class="ind-card"><div class="ind-title">${title}</div><div style="color:var(--text3);font-size:13px;padding:6px 0">資料不足${data.說明?'：'+escapeHtml(data.說明):''}</div></div>`;
     }
-    if(isText){
-      const text=Object.values(data)[0]||'';
-      return `<div class="ind-card"><div class="ind-title">${title}</div><div style="font-size:13px;line-height:1.8;white-space:pre-wrap;color:var(--text2)">${escapeHtml(text)}</div></div>`;
+    if('原始技術面摘要' in data){
+      return `<div class="ind-card"><div class="ind-title">${title}</div><div style="font-size:13px;line-height:1.8;white-space:pre-wrap;color:var(--text2)">${escapeHtml(data.原始技術面摘要)}</div></div>`;
     }
     return `<div class="ind-card"><div class="ind-title">${title}</div>${renderKeyValueRows(data)}</div>`;
   };
   return `<div class="indicator-grid">
-    ${section('📈 技術面',summaryData.technical,true)}
-    ${section('🏢 基本面',summaryData.fundamental,false)}
-    ${section('💰 籌碼面',summaryData.chip,false)}
-    ${section('📊 市場情緒',summaryData.sentiment,false)}
+    ${section('📈 技術面',summaryData.technical)}
+    ${section('🏢 基本面',summaryData.fundamental)}
+    ${section('💰 籌碼面',summaryData.chip)}
+    ${section('📊 市場情緒',summaryData.sentiment)}
   </div>`;
 }
-async function runSummaryAnalysis(symbol,companyName,techSummary,chipData,sentimentData,info,gen){
-  const summaryData=buildSummaryData(info,techSummary,chipData,sentimentData);
+async function runSummaryAnalysis(symbol,companyName,techSummary,chipData,sentimentData,info,gen,data){
+  const summaryData=buildSummaryData(info,techSummary,chipData,sentimentData,data);
   const prompt=buildSummaryPrompt(symbol,companyName,summaryData);
   await streamGemini({prompt,model:selectedModel},'summaryContent','🧭 四面向綜合摘要',false,0,gen);
   if(gen!=null&&gen!==analyzeGeneration) return;
