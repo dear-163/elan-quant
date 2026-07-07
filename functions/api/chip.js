@@ -62,11 +62,48 @@ async function fetchMargin(stockCode) {
   }
 }
 
-async function fetchHolderDistribution(stockCode, env) {
+// TWSE 官方公司基本資料裡的「產業別」代碼，免費不需金鑰。快取久一點(產業分類幾乎不會變動)。
+// 只找出「跟目前股票同產業代碼的其他股票代號」，不需要翻譯代碼成中文產業名稱——直接秀出實際同業
+// 公司名稱當比較對象，比硬翻代碼表更誠實，也不會有翻錯名稱的風險。上櫃股票目前沒找到對應的官方
+// 產業分類公開資料，所以只有上市(TWSE)股票會有這個比較，上櫃股票會誠實顯示暫無資料。
+async function fetchIndustryPeerCodes(stockCode, context) {
   try {
-    const res = await fetch('https://opendata.tdcc.com.tw/getOD.ashx?id=1-5', { headers: BROWSER_HEADERS });
-    if (!res.ok) return { error: `TDCC 集保股權分散表請求失敗：HTTP ${res.status}` };
-    const text = await res.text();
+    const cache = caches.default;
+    const cacheKey = new Request('https://elan-quant-cache.internal/twse-industry-list', { method: 'GET' });
+    let list;
+    const cached = await cache.match(cacheKey);
+    if (cached) {
+      list = await cached.json();
+    } else {
+      const res = await fetch('https://openapi.twse.com.tw/v1/opendata/t187ap03_L', { headers: BROWSER_HEADERS });
+      if (!res.ok) return null;
+      list = await res.json();
+      if (!Array.isArray(list)) return null;
+      const cacheResponse = json(list, 200, { 'Cache-Control': 'public, max-age=86400' });
+      context.waitUntil(cache.put(cacheKey, cacheResponse.clone()));
+    }
+    const me = list.find(r => (r['公司代號'] || '').trim() === stockCode);
+    const industryCode = me?.['產業別']?.trim();
+    if (!industryCode) return null;
+    const peers = list.filter(r => (r['產業別'] || '').trim() === industryCode && (r['公司代號'] || '').trim() !== stockCode);
+    return {
+      peerCodes: new Set(peers.map(p => (p['公司代號'] || '').trim())),
+      sampleNames: peers.slice(0, 3).map(p => p['公司簡稱'] || p['公司名稱']).filter(Boolean),
+      totalPeers: peers.length,
+    };
+  } catch (e) {
+    return null; // industry comparison is a nice-to-have — a failure here shouldn't break the whole holders card
+  }
+}
+
+async function fetchHolderDistribution(stockCode, env, context) {
+  try {
+    const [tdccRes, industryInfo] = await Promise.all([
+      fetch('https://opendata.tdcc.com.tw/getOD.ashx?id=1-5', { headers: BROWSER_HEADERS }),
+      fetchIndustryPeerCodes(stockCode, context),
+    ]);
+    if (!tdccRes.ok) return { error: `TDCC 集保股權分散表請求失敗：HTTP ${tdccRes.status}` };
+    const text = await tdccRes.text();
     const lines = text.trim().split('\n');
     if (lines.length < 2) return { error: 'TDCC 回應內容為空或格式異常' };
     const headers = lines[0].replace(/^﻿/, '').split(',').map(h => h.trim());
@@ -80,14 +117,21 @@ async function fetchHolderDistribution(stockCode, env) {
       return { error: `TDCC CSV 欄位與預期不符，實際欄位：${headers.join('、')}` };
     }
     let dataDate = null, bigHolderPct = null, midHolderPct = 0, foundMid = 0;
+    // Same single pass over the ~68k-line CSV also tallies big-holder % for same-industry peers —
+    // marginal cost is near zero since we're already reading every line for the target stock anyway.
+    const peerPcts = [];
     for (let i = 1; i < lines.length; i++) {
       const cols = lines[i].split(',');
-      if (cols[idx.code]?.trim() !== stockCode) continue;
+      const code = cols[idx.code]?.trim();
       const level = parseInt(cols[idx.level], 10);
       const pct = parseFloat(cols[idx.pct]);
-      dataDate = cols[idx.date]?.trim();
-      if (level === 15) bigHolderPct = isFinite(pct) ? pct : null;
-      if (level === 12 || level === 13 || level === 14) { midHolderPct += isFinite(pct) ? pct : 0; foundMid++; }
+      if (code === stockCode) {
+        dataDate = cols[idx.date]?.trim();
+        if (level === 15) bigHolderPct = isFinite(pct) ? pct : null;
+        if (level === 12 || level === 13 || level === 14) { midHolderPct += isFinite(pct) ? pct : 0; foundMid++; }
+      } else if (level === 15 && industryInfo?.peerCodes.has(code) && isFinite(pct)) {
+        peerPcts.push(pct);
+      }
     }
     if (dataDate == null) return { error: `TDCC 資料中找不到證券代號 ${stockCode}` };
     const isoDate = isoFromRocOrAd(dataDate);
@@ -116,9 +160,21 @@ async function fetchHolderDistribution(stockCode, env) {
       weeklyChange = { value: null, source, note: '暫無資料（D1 尚未綁定，無法比對歷史週快照）' };
     }
 
+    let industryAvgPct;
+    if (!industryInfo) {
+      industryAvgPct = { value: null, source, note: '暫無資料（找不到官方產業分類資料，或此股票非上市股票）' };
+    } else if (peerPcts.length === 0) {
+      industryAvgPct = { value: null, source, note: `暫無資料（同產業 ${industryInfo.totalPeers} 家中，今日集保資料都查無千張大戶佔比）` };
+    } else {
+      const avg = peerPcts.reduce((s, v) => s + v, 0) / peerPcts.length;
+      const sampleNote = industryInfo.sampleNames.length ? `比較對象例如：${industryInfo.sampleNames.join('、')} 等共 ${peerPcts.length} 家同產業股票` : `同產業共 ${peerPcts.length} 家股票`;
+      industryAvgPct = { value: avg, source, date: isoDate, note: sampleNote };
+    }
+
     return {
       bigHolderPct: { value: bigHolderPct, source, date: isoDate },
       midHolderPct: { value: foundMid > 0 ? midHolderPct : null, source, date: isoDate },
+      industryAvgPct,
       weeklyChange,
     };
   } catch (e) {
@@ -310,13 +366,13 @@ export async function onRequestGet(context) {
   if (isTpex) {
     [margin, holders, institutional] = await Promise.all([
       fetchMarginTpex(stockCode, env),
-      fetchHolderDistribution(stockCode, env),
+      fetchHolderDistribution(stockCode, env, context),
       fetchInstitutionalFlowTpex(stockCode, env),
     ]);
   } else {
     [margin, holders, institutional] = await Promise.all([
       fetchMargin(stockCode),
-      fetchHolderDistribution(stockCode, env),
+      fetchHolderDistribution(stockCode, env, context),
       fetchInstitutionalFlow(stockCode),
     ]);
     const isNotFoundOnTwse = (margin.error && margin.error.includes('找不到股票代號')) || 

@@ -187,7 +187,8 @@ function calcKD(data,n=9){
 function last(a){return a.filter(v=>v!=null).slice(-1)[0];}
 function fmt(v,d=2){return v!=null?Number(v).toFixed(d):'N/A';}
 function sigBadge(s){
-  const m={BUY:['badge-green','買入'],SELL:['badge-red','賣出'],OVERBOUGHT:['badge-red','超買'],OVERSOLD:['badge-green','超賣'],NEUTRAL:['badge-amber','中性']};
+  // 台股慣例：買入(好事)=紅，賣出(壞事)=綠；超買/超賣本來就已經對齊「漲=紅跌=綠」不用動
+  const m={BUY:['badge-red','買入'],SELL:['badge-green','賣出'],OVERBOUGHT:['badge-red','超買'],OVERSOLD:['badge-green','超賣'],NEUTRAL:['badge-amber','中性']};
   const[cls,txt]=m[s]||['badge-amber','中性'];
   return`<span class="badge ${cls}">${txt}</span>`;
 }
@@ -690,7 +691,8 @@ function fmtField(field,formatter){
   if(field.value==null) return `<span style="color:var(--text3)">暫無資料</span>${field.note?`<div class="src-note">${escapeHtml(field.note)}</div>`:''}`;
   const val=formatter?formatter(field.value):field.value;
   const src=field.source?`${field.source}${field.date?'／'+field.date:''}`:'';
-  return `${val}${src?`<div class="src-note">來源：${escapeHtml(src)}</div>`:''}`;
+  const noteLine=field.note?`<div class="src-note">${escapeHtml(field.note)}</div>`:'';
+  return `${val}${src?`<div class="src-note">來源：${escapeHtml(src)}</div>`:''}${noteLine}`;
 }
 
 async function fetchChip(symbol){
@@ -718,6 +720,7 @@ function renderChip(data){
       ${h.error?`<div class="error-box">⚠ 暫無資料：${escapeHtml(h.error)}</div>`:`
       <div class="ind-row"><span class="ind-name">千張大戶佔比</span><span class="ind-val">${fmtField(h.bigHolderPct,v=>v.toFixed(2)+'%')}</span></div>
       <div class="ind-row"><span class="ind-name">中實戶佔比</span><span class="ind-val">${fmtField(h.midHolderPct,v=>v.toFixed(2)+'%')}</span></div>
+      <div class="ind-row"><span class="ind-name">同產業大戶佔比平均</span><span class="ind-val ${(h.industryAvgPct?.value!=null&&h.bigHolderPct?.value!=null)?(h.bigHolderPct.value>h.industryAvgPct.value?'up':h.bigHolderPct.value<h.industryAvgPct.value?'down':''):''}">${fmtField(h.industryAvgPct,v=>v.toFixed(2)+'%')}</span></div>
       <div class="ind-row"><span class="ind-name">週變化（千張大戶）</span><span class="ind-val">${fmtField(h.weeklyChange,v=>(v>=0?'+':'')+v.toFixed(2)+'%')}</span></div>
       <div class="src-note" style="margin-top:6px">集保股權分散表每週五更新一次，其餘平日資料不變。</div>`}
     </div>
