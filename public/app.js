@@ -7,6 +7,13 @@ let priceChart=null, rsiChart=null, macdChart=null;
 // DOM write, so a superseded call's late-arriving response gets silently dropped instead of
 // overwriting the current symbol's UI with stale data.
 let analyzeGeneration=0;
+// model id -> user-facing message, once its daily free-tier quota is confirmed exhausted this
+// session. A single analyze() call fires ~5 separate Gemini requests (4 analysis sections + the
+// summary); without this, every one of them independently retries twice (15s+30s) before showing
+// the same "quota exhausted" message, so a single exhausted-quota analysis takes minutes to fully
+// fail. Once one section confirms exhaustion, later sections for the same model skip straight to
+// the message.
+let quotaExhaustedModels=new Map();
 
 function saveApiKey(){
   const val=document.getElementById('apiKeyInput').value.trim();
@@ -538,6 +545,7 @@ ${techSummary}
 
 async function streamGemini(payload,targetId,cardTitle,append,retryCount=0,gen=null){
   if(gen!=null&&gen!==analyzeGeneration) return; // superseded before we even started this section
+  const modelUsed=payload.model||selectedModel;
   const el=document.getElementById(targetId);
   const cardId='gc-'+Math.random().toString(36).slice(2);
   const card=document.createElement('div');
@@ -546,6 +554,12 @@ async function streamGemini(payload,targetId,cardTitle,append,retryCount=0,gen=n
   if(append) el.appendChild(card);
   else{ el.innerHTML=''; el.appendChild(card); }
   const contentEl=document.getElementById(cardId);
+
+  if(retryCount===0&&quotaExhaustedModels.has(modelUsed)){
+    contentEl.classList.remove('streaming');
+    contentEl.innerHTML=`<div class="error-box">⚠ AI 分析失敗：${quotaExhaustedModels.get(modelUsed)}</div>`;
+    return;
+  }
 
   try{
     const res=await fetch(
@@ -590,9 +604,10 @@ async function streamGemini(payload,targetId,cardTitle,append,retryCount=0,gen=n
         if(limitNum&&/free_tier_requests/i.test(errMsg)){
           // Suggest an actually different model — if the visitor is already on Flash-Lite (the model
           // that just ran out), telling them to "switch to Flash-Lite" would be nonsensical.
-          const usedModel=payload.model||selectedModel;
-          const altSuggestion=usedModel==='gemini-3.1-flash-lite'?'3.5 Flash 或 3.5 Pro':'3.1 Flash-Lite';
-          throw new Error(`此模型今日免費額度（每日 ${limitNum} 次）可能已用完，請明天再試，或在上方切換其他 AI 模型（例如 ${altSuggestion}）。`);
+          const altSuggestion=modelUsed==='gemini-3.1-flash-lite'?'3.5 Flash 或 3.5 Pro':'3.1 Flash-Lite';
+          const msg=`此模型今日免費額度（每日 ${limitNum} 次）可能已用完，請明天再試，或在上方切換其他 AI 模型（例如 ${altSuggestion}）。`;
+          quotaExhaustedModels.set(modelUsed,msg);
+          throw new Error(msg);
         }
         throw new Error('AI 服務持續忙碌，請等待1-2分鐘後重新分析。');
       }
