@@ -256,7 +256,16 @@ function calcTechSignals(data, info) {
 function buildTechSummary(sym,data,info){
   const c=data.map(d=>d.close);
   const lc=typeof info.regularMarketPrice==='number'?info.regularMarketPrice:c[c.length-1];
-  const pc=typeof info.regularMarketPreviousClose==='number'?info.regularMarketPreviousClose:(info.previousClose||c[c.length-2]||lc);
+  let pc;
+  if (typeof info.regularMarketPrice === 'number' && c.length > 0) {
+    if (Math.abs(c[c.length - 1] - info.regularMarketPrice) < 0.001) {
+      pc = c[c.length - 2] ?? c[c.length - 1];
+    } else {
+      pc = c[c.length - 1];
+    }
+  } else {
+    pc = c[c.length - 2] ?? c[c.length - 1];
+  }
   const allHighs=data.map(d=>d.high).filter(Boolean);
   const allLows=data.map(d=>d.low).filter(Boolean);
   const h52=typeof info.fiftyTwoWeekHigh==='number'?info.fiftyTwoWeekHigh.toFixed(2):(allHighs.length?Math.max(...allHighs).toFixed(2):'N/A');
@@ -343,7 +352,16 @@ function renderTech(symbol,data,info){
   const ma10=sma(c,10),ma60=sma(c,60);
   const lMA10=last(ma10),lMA60=last(ma60);
   const lc=typeof info.regularMarketPrice==='number'?info.regularMarketPrice:c[c.length-1];
-  const pc=typeof info.regularMarketPreviousClose==='number'?info.regularMarketPreviousClose:(info.previousClose||c[c.length-2]||lc);
+  let pc;
+  if (typeof info.regularMarketPrice === 'number' && c.length > 0) {
+    if (Math.abs(c[c.length - 1] - info.regularMarketPrice) < 0.001) {
+      pc = c[c.length - 2] ?? c[c.length - 1];
+    } else {
+      pc = c[c.length - 1];
+    }
+  } else {
+    pc = c[c.length - 2] ?? c[c.length - 1];
+  }
   const chg=lc-pc;
   const chgPct=pc?chg/pc*100:0;
   
@@ -363,7 +381,7 @@ function renderTech(symbol,data,info){
   const dayLow=info.regularMarketDayLow||todayBar.low||null;
   const dayOpen=info.regularMarketOpen||todayBar.open||null;
   const dayVol=info.regularMarketVolume||todayBar.volume||null;
-  const prevClose=info.previousClose||info.regularMarketPreviousClose||prevBar.close||lc;
+  const prevClose=pc;
   const avgVol=info.averageVolume||info.averageDailyVolume10Day||null;
   const allHighs=data.map(d=>d.high).filter(Boolean);
   const allLows=data.map(d=>d.low).filter(Boolean);
