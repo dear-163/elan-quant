@@ -1,112 +1,131 @@
 // US-market equivalent of chip.js. Taiwan's 融資融券/集保股權分散/三大法人 are TWSE/TDCC-specific —
-// the US has no daily equivalent (see README). The closest official/regulatory concepts are:
-//   - Institutional ownership: SEC Form 13F, filed quarterly (45-day lag after quarter end)
-//   - Insider trading: SEC Form 4, filed within 2 business days of a transaction
-// Both are sourced via FMP (already used elsewhere in this app), NOT scraped from SEC EDGAR directly.
-// FINRA short-interest data (bi-monthly) has no FMP endpoint as of this writing — would require
-// parsing FINRA's raw bulk files, a separate and more fragile undertaking, so it's out of scope here.
+// the US has no daily equivalent. Institutional ownership (SEC 13F) would require aggregating
+// thousands of individual filers' holdings by CUSIP with no reliable free ticker-to-CUSIP crosswalk,
+// and the only ready-made aggregation (FMP) gates it behind their Ultimate tier (~$149/mo) — not
+// realistic for a free BYOK visitor, so that's deliberately out of scope here.
+//
+// Insider trading (SEC Form 4) IS practical: SEC EDGAR is free, requires no API key, and Form 4 is
+// inherently per-company (no cross-filer aggregation needed). Fetched directly from data.sec.gov.
+//
+// Only transaction codes 'P' (open market/private purchase) and 'S' (open market/private sale) are
+// counted — verified against SEC's own code table. Codes like 'A' (compensation grant), 'F' (tax
+// withholding), 'M' (option/RSU exercise), 'G' (gift) are NOT discretionary trading decisions; a real
+// AAPL filing inspected while building this had exactly 'M' and 'F' transactions from routine RSU
+// vesting — counting those as "insider bought/sold" would have been a fabricated signal.
 const SYMBOL_RE = /^[A-Za-z0-9.\-]{1,15}$/;
+const SEC_HEADERS = { 'User-Agent': 'ElanQuant/1.0 (elan-quant.pages.dev, contact via GitHub)', 'Accept': 'application/json' };
+const MAX_FILINGS = 20; // recent Form 4 filings to inspect per request — enough for a meaningful recent signal without excessive fetches
 
 function json(obj, status = 200, extraHeaders = {}) {
   return new Response(JSON.stringify(obj), { status, headers: { 'Content-Type': 'application/json', ...extraHeaders } });
 }
 
-// 13F filings are due 45 days after quarter end (SEC deadline). Add a few days' safety buffer for
-// FMP to have actually ingested the filing before treating a quarter as "available".
-function latestAvailable13F(now) {
-  const y = now.getUTCFullYear();
-  const candidates = [];
-  for (const yr of [y - 1, y]) {
-    candidates.push({ year: yr - 1, quarter: 4, deadline: Date.UTC(yr, 1, 18) });  // Q4 prior year, due ~Feb 14
-    candidates.push({ year: yr, quarter: 1, deadline: Date.UTC(yr, 4, 19) });      // Q1, due ~May 15
-    candidates.push({ year: yr, quarter: 2, deadline: Date.UTC(yr, 7, 18) });      // Q2, due ~Aug 14
-    candidates.push({ year: yr, quarter: 3, deadline: Date.UTC(yr, 10, 18) });     // Q3, due ~Nov 14
+async function fetchRecentForm4Filings(cik) {
+  const res = await fetch(`https://data.sec.gov/submissions/CIK${cik}.json`, { headers: SEC_HEADERS });
+  if (!res.ok) throw new Error(`SEC submissions HTTP ${res.status}`);
+  const body = await res.json();
+  const recent = body?.filings?.recent;
+  if (!recent || !Array.isArray(recent.form)) throw new Error('SEC submissions 回應格式與預期不符');
+  const filings = [];
+  for (let i = 0; i < recent.form.length && filings.length < MAX_FILINGS; i++) {
+    if (recent.form[i] !== '4') continue;
+    filings.push({ accession: recent.accessionNumber[i], primaryDoc: recent.primaryDocument[i], date: recent.filingDate[i] });
   }
-  const nowMs = now.getTime();
-  const valid = candidates.filter(c => c.deadline <= nowMs).sort((a, b) => b.deadline - a.deadline);
-  return valid[0] || null;
+  return filings;
 }
 
-async function fetchInstitutionalOwnership(symbol, fmpKey) {
-  const q = latestAvailable13F(new Date());
-  if (!q) return { error: '無法判斷最新可用的13F申報季度' };
-  try {
-    const res = await fetch(`https://financialmodelingprep.com/stable/institutional-ownership/symbol-positions-summary?symbol=${symbol}&year=${q.year}&quarter=${q.quarter}&apikey=${fmpKey}`);
-    if (!res.ok) {
-      const body = await res.json().catch(() => ({}));
-      return { error: `FMP institutional-ownership 請求失敗：HTTP ${res.status}${body?.['Error Message'] ? '（' + body['Error Message'] + '）' : ''}` };
-    }
-    const body = await res.json();
-    if (body?.['Error Message']) return { error: `FMP institutional-ownership：${body['Error Message']}` };
-    const row = Array.isArray(body) ? body[0] : body;
-    if (!row) return { error: `FMP 尚無 ${symbol} ${q.year}Q${q.quarter} 的機構持股資料（可能該季申報尚未涵蓋此股票）` };
-    const source = `FMP（SEC 13F，${q.year}年第${q.quarter}季申報）`;
-    const dateLabel = `${q.year}Q${q.quarter}`;
-    return {
-      ownershipPercent: { value: row.ownershipPercent ?? null, source, date: dateLabel },
-      investorsHolding: { value: row.investorsHolding ?? null, source, date: dateLabel },
-      investorsHoldingChange: { value: row.investorsHoldingChange ?? null, source, date: dateLabel },
-      totalInvested: { value: row.totalInvested ?? null, source, date: dateLabel },
-    };
-  } catch (e) {
-    return { error: `FMP institutional-ownership 請求發生例外：${e.message}` };
+// The submissions API's primaryDocument often points at the XSL-rendered HTML view
+// (xslF345X06/form4.xml) — the machine-readable raw XML is always at the accession root as
+// "<accession>.xml" style naming; verified by inspecting a real filing directory listing.
+async function fetchForm4Transactions(cik, accession) {
+  const noDash = accession.replace(/-/g, '');
+  const cikNum = parseInt(cik, 10);
+  const res = await fetch(`https://www.sec.gov/Archives/edgar/data/${cikNum}/${noDash}/${accession}.xml`, { headers: { ...SEC_HEADERS, 'Accept': 'application/xml' } });
+  if (!res.ok) return [];
+  const xml = await res.text();
+  const transactions = [];
+  // Minimal, dependency-free XML field extraction — Form 4's schema is stable and well-documented,
+  // and we only need three fields per non-derivative transaction (open-market buys/sells only live
+  // in <nonDerivativeTransaction>, not the derivative table).
+  const txBlocks = xml.match(/<nonDerivativeTransaction>[\s\S]*?<\/nonDerivativeTransaction>/g) || [];
+  for (const block of txBlocks) {
+    const codeMatch = block.match(/<transactionCode>([^<]*)<\/transactionCode>/);
+    const sharesMatch = block.match(/<transactionShares>\s*<value>([^<]*)<\/value>/);
+    const adMatch = block.match(/<transactionAcquiredDisposedCode>\s*<value>([^<]*)<\/value>/);
+    const dateMatch = block.match(/<transactionDate>\s*<value>([^<]*)<\/value>/);
+    const code = codeMatch?.[1];
+    if (code !== 'P' && code !== 'S') continue; // only genuine open-market trades — see file header note
+    const shares = parseFloat(sharesMatch?.[1]);
+    if (!isFinite(shares)) continue;
+    transactions.push({ code, shares, acquiredDisposed: adMatch?.[1], date: dateMatch?.[1] });
   }
-}
-
-async function fetchInsiderTradingStats(symbol, fmpKey) {
-  try {
-    const res = await fetch(`https://financialmodelingprep.com/stable/insider-trading/statistics?symbol=${symbol}&apikey=${fmpKey}`);
-    if (!res.ok) {
-      const body = await res.json().catch(() => ({}));
-      return { error: `FMP insider-trading/statistics 請求失敗：HTTP ${res.status}${body?.['Error Message'] ? '（' + body['Error Message'] + '）' : ''}` };
-    }
-    const body = await res.json();
-    if (body?.['Error Message']) return { error: `FMP insider-trading/statistics：${body['Error Message']}` };
-    const row = Array.isArray(body) ? body[0] : body;
-    if (!row) return { error: `FMP 尚無 ${symbol} 的內部人交易統計資料` };
-    const source = 'FMP（SEC Form 4 內部人申報彙總）';
-    const dateLabel = row.year && row.quarter ? `${row.year}Q${row.quarter}` : null;
-    const acquired = row.totalAcquired ?? row.acquired ?? null;
-    const disposed = row.totalDisposed ?? row.disposed ?? null;
-    return {
-      totalAcquired: { value: acquired, source, date: dateLabel },
-      totalDisposed: { value: disposed, source, date: dateLabel },
-      netShares: { value: (acquired != null && disposed != null) ? acquired - disposed : null, source, date: dateLabel },
-    };
-  } catch (e) {
-    return { error: `FMP insider-trading/statistics 請求發生例外：${e.message}` };
-  }
+  return transactions;
 }
 
 export async function onRequestGet(context) {
   const { request, env } = context;
   const url = new URL(request.url);
   const symbol = (url.searchParams.get('symbol') || '').trim().toUpperCase();
-  const fmpKey = (url.searchParams.get('fmpKey') || '').trim() || env.FMP_KEY;
   if (!SYMBOL_RE.test(symbol)) {
     return json({ error: '股票代號格式不正確' }, 400);
   }
-  if (!fmpKey) {
-    return json({
-      institutional: { error: '需要 FMP API Key 才能查詢機構持股資料（台股籌碼面不需要 Key，但美股的 13F/內部人資料只能透過 FMP 取得）' },
-      insider: { error: '需要 FMP API Key 才能查詢內部人交易資料' },
-    });
-  }
 
-  // 13F is quarterly and insider-trading stats change slowly — cache generously to conserve FMP's
-  // 250/day free-tier quota, matching ground.js's rationale for the same tradeoff.
   const cache = caches.default;
   const cacheKey = new Request(`https://elan-quant-cache.internal/chip-us/${symbol}`, { method: 'GET' });
   const cached = await cache.match(cacheKey);
   if (cached) return cached;
 
-  const [institutional, insider] = await Promise.all([
-    fetchInstitutionalOwnership(symbol, fmpKey),
-    fetchInsiderTradingStats(symbol, fmpKey),
-  ]);
+  let insider;
+  try {
+    // Ticker->CIK mapping, cached separately (long TTL) from the per-symbol result below.
+    const tickerCacheKey = new Request('https://elan-quant-cache.internal/sec-tickers', { method: 'GET' });
+    let tickerBody;
+    const tickerCached = await cache.match(tickerCacheKey);
+    if (tickerCached) {
+      tickerBody = await tickerCached.json();
+    } else {
+      const res = await fetch('https://www.sec.gov/files/company_tickers.json', { headers: SEC_HEADERS });
+      if (!res.ok) throw new Error(`SEC company_tickers.json HTTP ${res.status}`);
+      tickerBody = await res.json();
+      const tickerResponse = json(tickerBody, 200, { 'Cache-Control': 'public, max-age=86400' });
+      context.waitUntil(cache.put(tickerCacheKey, tickerResponse.clone()));
+    }
+    const entry = Object.values(tickerBody).find(v => v.ticker === symbol);
+    if (!entry) {
+      insider = { error: `SEC EDGAR 找不到股票代號 ${symbol} 對應的公司（可能非美股上市公司）` };
+    } else {
+      const cik = String(entry.cik_str).padStart(10, '0');
+      const filings = await fetchRecentForm4Filings(cik);
+      if (filings.length === 0) {
+        insider = { error: `SEC EDGAR 近期無 ${symbol} 的 Form 4（內部人交易）申報紀錄` };
+      } else {
+        const allTx = (await Promise.all(filings.map(f => fetchForm4Transactions(cik, f.accession)))).flat();
+        const source = `SEC EDGAR Form 4（近${filings.length}筆申報，僅計入代碼P/S的公開市場買賣，不含選擇權履約/稅務代扣/獎勵歸屬等）`;
+        const latestDate = filings[0]?.date || null;
+        if (allTx.length === 0) {
+          insider = {
+            totalBought: { value: 0, source, date: latestDate },
+            totalSold: { value: 0, source, date: latestDate },
+            netShares: { value: 0, source, date: latestDate },
+            note: '近期申報中沒有公開市場買賣交易（可能都是獎勵歸屬、稅務代扣等非交易性質的申報）',
+          };
+        } else {
+          const bought = allTx.filter(t => t.code === 'P').reduce((s, t) => s + t.shares, 0);
+          const sold = allTx.filter(t => t.code === 'S').reduce((s, t) => s + t.shares, 0);
+          insider = {
+            totalBought: { value: bought, source, date: latestDate },
+            totalSold: { value: sold, source, date: latestDate },
+            netShares: { value: bought - sold, source, date: latestDate },
+          };
+        }
+      }
+    }
+  } catch (e) {
+    insider = { error: `SEC EDGAR 請求發生例外：${e.message}` };
+  }
 
-  const gotRealData = !institutional.error || !insider.error;
-  const response = json({ institutional, insider }, 200, gotRealData ? { 'Cache-Control': 'public, max-age=3600' } : {});
+  const gotRealData = !insider.error;
+  const response = json({ insider }, 200, gotRealData ? { 'Cache-Control': 'public, max-age=3600' } : {});
   if (gotRealData) {
     context.waitUntil(cache.put(cacheKey, response.clone()));
   }

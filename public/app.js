@@ -719,27 +719,20 @@ async function fetchChipUS(symbol){
 
 function renderChipUS(data){
   const el=document.getElementById('chipContent');
-  const inst=data.institutional||{},ins=data.insider||{};
+  const ins=data.insider||{};
   const num=v=>Number(v).toLocaleString();
   el.innerHTML=`
   <div class="indicator-grid">
-    <div class="ind-card"><div class="ind-title">🏛️ 機構持股（SEC 13F）</div>
-      ${inst.error?`<div class="error-box">⚠ 暫無資料：${escapeHtml(inst.error)}</div>`:`
-      <div class="ind-row"><span class="ind-name">機構持股比例</span><span class="ind-val">${fmtField(inst.ownershipPercent,v=>v.toFixed(2)+'%')}</span></div>
-      <div class="ind-row"><span class="ind-name">持股機構數</span><span class="ind-val">${fmtField(inst.investorsHolding,num)}</span></div>
-      <div class="ind-row"><span class="ind-name">持股機構數變化</span><span class="ind-val ${inst.investorsHoldingChange?.value>0?'up':inst.investorsHoldingChange?.value<0?'down':''}">${fmtField(inst.investorsHoldingChange,v=>(v>=0?'+':'')+num(v))}</span></div>
-      <div class="ind-row"><span class="ind-name">機構總投資金額</span><span class="ind-val">${fmtField(inst.totalInvested,v=>'$'+num(v))}</span></div>
-      <div class="src-note" style="margin-top:6px">SEC 規定管理逾1億美元的機構每季申報一次（13F），非每日資料。</div>`}
-    </div>
     <div class="ind-card"><div class="ind-title">👤 內部人買賣（SEC Form 4）</div>
       ${ins.error?`<div class="error-box">⚠ 暫無資料：${escapeHtml(ins.error)}</div>`:`
-      <div class="ind-row"><span class="ind-name">累計買進股數</span><span class="ind-val">${fmtField(ins.totalAcquired,num)}</span></div>
-      <div class="ind-row"><span class="ind-name">累計賣出股數</span><span class="ind-val">${fmtField(ins.totalDisposed,num)}</span></div>
+      <div class="ind-row"><span class="ind-name">累計買進股數</span><span class="ind-val">${fmtField(ins.totalBought,num)}</span></div>
+      <div class="ind-row"><span class="ind-name">累計賣出股數</span><span class="ind-val">${fmtField(ins.totalSold,num)}</span></div>
       <div class="ind-row"><span class="ind-name">淨買賣股數</span><span class="ind-val ${ins.netShares?.value>0?'up':ins.netShares?.value<0?'down':''}">${fmtField(ins.netShares,v=>(v>=0?'+':'')+num(v))}</span></div>
-      <div class="src-note" style="margin-top:6px">內部人（高管／大股東）交易須於2個營業日內申報，僅反映有申報的交易，非每日加總。</div>`}
+      ${ins.note?`<div class="src-note" style="margin-top:6px">${escapeHtml(ins.note)}</div>`:''}
+      <div class="src-note" style="margin-top:6px">僅計入公開市場買賣（交易代碼P/S），不含選擇權履約、稅務代扣、股票獎勵歸屬等非交易性質的申報。內部人須於交易後2個營業日內申報，非每日加總。</div>`}
     </div>
   </div>
-  <div class="disclaimer">⚠ 美股無台股融資融券／集保股權分散／三大法人的每日對應資料，此處以 SEC 13F／Form 4 申報資料替代。僅供參考，不構成投資建議。資料來源：FMP（SEC 官方申報彙整）。</div>`;
+  <div class="disclaimer">⚠ 美股無台股融資融券／集保股權分散／三大法人的每日對應資料，此處以 SEC Form 4（內部人買賣申報）替代——機構持股（13F）需要付費資料服務才能彙整，故不提供。僅供參考，不構成投資建議。資料來源：SEC EDGAR 官方申報。</div>`;
 }
 
 // ---- 市場情緒（貪婪指數）----
@@ -812,11 +805,12 @@ function buildSummaryData(info,techSummary,chipData,sentimentData){
   let chip=null,chipInsufficient=true;
   if(chipData){
     if('insider' in chipData){
-      // US shape (chip-us.js): SEC 13F institutional ownership + Form 4 insider trading
-      const inst=chipData.institutional||{},ins=chipData.insider||{};
+      // US shape (chip-us.js): SEC Form 4 insider trading only — 13F institutional ownership was
+      // dropped, it needs a paid data service (FMP gates it behind a ~$149/mo tier) to aggregate.
+      const ins=chipData.insider||{};
       chip={
-        機構持股比例:!inst.error&&inst.ownershipPercent?.value!=null?inst.ownershipPercent.value.toFixed(2)+'%':null,
-        持股機構數:!inst.error&&inst.investorsHolding?.value!=null?inst.investorsHolding.value.toLocaleString():null,
+        內部人累計買進股數:!ins.error&&ins.totalBought?.value!=null?ins.totalBought.value.toLocaleString():null,
+        內部人累計賣出股數:!ins.error&&ins.totalSold?.value!=null?ins.totalSold.value.toLocaleString():null,
         內部人淨買賣股數:!ins.error&&ins.netShares?.value!=null?ins.netShares.value.toLocaleString():null,
       };
     } else {
