@@ -438,7 +438,7 @@ function renderTech(symbol,data,info){
       ${sig.rsi==='OVERSOLD'?'<div class="c-item"><div class="c-dot" style="background:var(--green)"></div>RSI 低於 30，超賣反彈機會</div>':''}
       ${(sig.kd==='BUY'||sig.kd==='OVERSOLD')?'<div class="c-item"><div class="c-dot" style="background:var(--green)"></div>KD 指標偏多或超賣訊號</div>':''}
       ${sig.bb==='OVERSOLD'?'<div class="c-item"><div class="c-dot" style="background:var(--green)"></div>股價觸及布林下軌，支撐訊號</div>':''}
-      ${buys===0&&ob===0&&os===0?'<div class="c-item" style="color:var(--text3)">目前無明顯多方訊號</div>':''}
+      ${buys===0&&os===0?'<div class="c-item" style="color:var(--text3)">目前無明顯多方訊號</div>':''}
     </div>
     <div class="conclusion-section">
       <div class="c-section-title">⚠️ 空方與風險</div>
