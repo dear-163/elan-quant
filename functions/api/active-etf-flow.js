@@ -1,0 +1,144 @@
+function json(obj, status = 200) {
+  return new Response(JSON.stringify(obj), { status, headers: { 'Content-Type': 'application/json' } });
+}
+
+export async function onRequestGet(context) {
+  const { request, env } = context;
+  const url = new URL(request.url);
+  const symbol = (url.searchParams.get('symbol') || '').trim().toUpperCase();
+
+  if (!env.ELAN_QUANT_DB) {
+    return json({ error: 'D1 database binding (ELAN_QUANT_DB) not found.' }, 500);
+  }
+
+  try {
+    // 1. Get the latest two dates available in active_etf_holdings
+    const dateRows = await env.ELAN_QUANT_DB
+      .prepare('SELECT DISTINCT date FROM active_etf_holdings ORDER BY date DESC LIMIT 2')
+      .all();
+
+    if (!dateRows.results || dateRows.results.length === 0) {
+      return json({ date: null, flow: [], rankings: { buys: [], sells: [] } });
+    }
+
+    const todayDate = dateRows.results[0].date;
+    const yesterdayDate = dateRows.results[1] ? dateRows.results[1].date : null;
+
+    // IF symbol is specified: return specific stock flow (Option A)
+    if (symbol) {
+      const match = symbol.match(/^(\d{4,6})/);
+      if (!match) {
+        return json({ date: todayDate, symbol, flow: [], note: '非台股純數字代號，暫不支援主動式 ETF 追蹤。' });
+      }
+      const stockCode = match[1];
+
+      // Query database for this stock on these dates
+      const querySql = yesterdayDate
+        ? 'SELECT etf_code, etf_name, shares, weight, date FROM active_etf_holdings WHERE stock_code = ? AND date IN (?, ?)'
+        : 'SELECT etf_code, etf_name, shares, weight, date FROM active_etf_holdings WHERE stock_code = ? AND date = ?';
+      
+      const bindings = yesterdayDate ? [stockCode, todayDate, yesterdayDate] : [stockCode, todayDate];
+      const records = await env.ELAN_QUANT_DB.prepare(querySql).bind(...bindings).all();
+
+      const list = records.results || [];
+      const etfMap = {};
+
+      for (const r of list) {
+        if (!etfMap[r.etf_code]) {
+          etfMap[r.etf_code] = { etf_code: r.etf_code, etf_name: r.etf_name, today: null, yesterday: null };
+        }
+        if (r.date === todayDate) etfMap[r.etf_code].today = r;
+        else etfMap[r.etf_code].yesterday = r;
+      }
+
+      const flow = [];
+      for (const code in etfMap) {
+        const item = etfMap[code];
+        const t = item.today;
+        const y = item.yesterday;
+
+        let changeShares = 0;
+        let changeWeight = 0;
+        let action = '無變動';
+
+        if (t && y) {
+          changeShares = t.shares - y.shares;
+          changeWeight = t.weight - y.weight;
+        } else if (t) {
+          changeShares = t.shares;
+          changeWeight = t.weight;
+        } else if (y) {
+          changeShares = -y.shares;
+          changeWeight = -y.weight;
+        }
+
+        if (changeShares > 0) action = '買進';
+        else if (changeShares < 0) action = '賣出';
+
+        flow.push({
+          etfCode: item.etf_code,
+          etfName: item.etf_name,
+          action,
+          shares: t ? t.shares : 0,
+          weight: t ? t.weight : 0,
+          changeShares,
+          changeWeight,
+          date: todayDate,
+          comparedTo: yesterdayDate
+        });
+      }
+
+      return json({
+        date: todayDate,
+        comparedTo: yesterdayDate,
+        symbol: stockCode,
+        flow: flow.filter(f => f.changeShares !== 0 || f.shares > 0)
+      });
+    }
+
+    // IF symbol is NOT specified: return market-wide rankings (Option B)
+    const allQuery = yesterdayDate
+      ? 'SELECT etf_code, etf_name, stock_code, shares, weight, date FROM active_etf_holdings WHERE date IN (?, ?)'
+      : 'SELECT etf_code, etf_name, stock_code, shares, weight, date FROM active_etf_holdings WHERE date = ?';
+    
+    const allBindings = yesterdayDate ? [todayDate, yesterdayDate] : [todayDate];
+    const allRecords = await env.ELAN_QUANT_DB.prepare(allQuery).bind(...allBindings).all();
+    const recordsList = allRecords.results || [];
+
+    // Group by stock_code
+    const stockChanges = {};
+    for (const r of recordsList) {
+      if (!stockChanges[r.stock_code]) {
+        stockChanges[r.stock_code] = { stock_code: r.stock_code, todayShares: 0, yesterdayShares: 0 };
+      }
+      if (r.date === todayDate) stockChanges[r.stock_code].todayShares += r.shares;
+      else stockChanges[r.stock_code].yesterdayShares += r.shares;
+    }
+
+    const changes = [];
+    for (const code in stockChanges) {
+      const item = stockChanges[code];
+      const changeShares = item.todayShares - item.yesterdayShares;
+      if (changeShares !== 0) {
+        changes.push({
+          stock_code: code,
+          changeShares,
+          action: changeShares > 0 ? '買超' : '賣超'
+        });
+      }
+    }
+
+    // Sort to find top buys and sells
+    const buys = changes.filter(c => c.changeShares > 0).sort((a, b) => b.changeShares - a.changeShares).slice(0, 5);
+    const sells = changes.filter(c => c.changeShares < 0).sort((a, b) => a.changeShares - b.changeShares).slice(0, 5);
+
+    return json({
+      date: todayDate,
+      comparedTo: yesterdayDate,
+      rankings: { buys, sells }
+    });
+
+  } catch (error) {
+    return json({ error: `查詢主動式 ETF 籌碼數據失敗：${error.message}` }, 500);
+  }
+}

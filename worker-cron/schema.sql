@@ -34,3 +34,16 @@ CREATE TABLE IF NOT EXISTS holder_weekly_snapshot (
   PRIMARY KEY (code, date)
 );
 CREATE INDEX IF NOT EXISTS idx_holder_weekly_snapshot_code_date ON holder_weekly_snapshot(code, date);
+
+-- 主動式 ETF 每日持股明細表（Option A & B 籌碼追蹤）
+CREATE TABLE IF NOT EXISTS active_etf_holdings (
+  etf_code TEXT NOT NULL,
+  etf_name TEXT NOT NULL,
+  stock_code TEXT NOT NULL,       -- 例如 2330
+  date TEXT NOT NULL,             -- 資料日期（YYYY-MM-DD 或 YYYYMMDD，統一使用 YYYY-MM-DD 格式）
+  shares INTEGER NOT NULL,        -- 持股股數
+  weight REAL NOT NULL,           -- 持股比重（百分比，如 5.34 表示 5.34%）
+  PRIMARY KEY (etf_code, stock_code, date)
+);
+CREATE INDEX IF NOT EXISTS idx_active_etf_holdings_stock_date ON active_etf_holdings(stock_code, date);
+CREATE INDEX IF NOT EXISTS idx_active_etf_holdings_etf_date ON active_etf_holdings(etf_code, date);

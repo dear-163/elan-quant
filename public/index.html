@@ -82,7 +82,23 @@
       <span class="ex-tag" onclick="quickLoad('MSFT')">MSFT（微軟）</span>
       <span class="ex-tag" onclick="quickLoad('TSM')">TSM（台積電ADR）</span>
     </div>
-    <p style="margin-top:18px;font-size:12px;color:var(--text3)">技術數據：Yahoo Finance｜基本面：Google Gemini AI｜僅供參考，不構成投資建議</p>
+    <div class="active-etf-rankings" id="activeEtfRankings" style="margin-top: 30px; text-align: left; display: none; max-width: 600px; margin-left: auto; margin-right: auto;">
+      <div style="font-size: 13px; font-weight: 700; color: var(--text); margin-bottom: 12px; display: flex; justify-content: space-between; align-items: center;">
+        <span>🤖 主動式 ETF 今日最愛（經理人加減碼排行）</span>
+        <span style="font-size: 10px; font-weight: normal; color: var(--text3);" id="activeEtfRankingsDate"></span>
+      </div>
+      <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px;">
+        <div class="ind-card" style="padding: 12px 14px; background: var(--bg3);">
+          <div style="font-size: 11px; color: var(--green); font-weight: 700; margin-bottom: 8px; text-transform: uppercase;">🔥 買超前五名</div>
+          <div id="activeEtfTopBuys" style="display: flex; flex-direction: column; gap: 6px; font-size: 12px;"></div>
+        </div>
+        <div class="ind-card" style="padding: 12px 14px; background: var(--bg3);">
+          <div style="font-size: 11px; color: var(--red); font-weight: 700; margin-bottom: 8px; text-transform: uppercase;">⚠️ 賣超前五名</div>
+          <div id="activeEtfTopSells" style="display: flex; flex-direction: column; gap: 6px; font-size: 12px;"></div>
+        </div>
+      </div>
+    </div>
+    <p style="margin-top:24px;font-size:12px;color:var(--text3)">技術數據：Yahoo Finance｜基本面：Google Gemini AI｜僅供參考，不構成投資建議</p>
   </div>
 
   <div class="loading hidden" id="loadingBox"><div class="spinner"></div><span id="loadingText">正在獲取數據⋯</span></div>

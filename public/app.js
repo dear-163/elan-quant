@@ -109,7 +109,19 @@ async function analyze(){
     const resolvedSym=info.symbol||sym;
     const isTW=isTaiwanSymbol(resolvedSym);
     await Promise.all([
-      (isTW?fetchChip(resolvedSym):fetchChipUS(resolvedSym)).then(d=>{ if(myGen!==analyzeGeneration) return; chipData=d; (isTW?renderChip:renderChipUS)(d); }).catch(e=>{
+      (isTW 
+        ? Promise.all([fetchChip(resolvedSym), fetchActiveEtfFlow(resolvedSym).catch(() => null)])
+            .then(([d, etf]) => {
+              if(myGen!==analyzeGeneration) return;
+              chipData=d;
+              renderChip(d, etf);
+            })
+        : fetchChipUS(resolvedSym).then(d => {
+              if(myGen!==analyzeGeneration) return;
+              chipData=d;
+              renderChipUS(d);
+            })
+      ).catch(e=>{
         if(myGen!==analyzeGeneration) return;
         document.getElementById('chipContent').innerHTML=`<div class="error-box">⚠ 籌碼面資料取得失敗：${escapeHtml(e.message)}</div>`;
       }),
@@ -716,11 +728,55 @@ async function fetchChip(symbol){
   return body;
 }
 
-function renderChip(data){
+function renderChip(data, etfData){
   const el=document.getElementById('chipContent');
   const m=data.margin||{},h=data.holders||{},inst=data.institutional||{};
   const pct=v=>(v*100).toFixed(2)+'%';
   const num=v=>Number(v).toLocaleString();
+
+  let etfHtml = '';
+  if (etfData) {
+    if (!etfData.flow || etfData.flow.length === 0) {
+      etfHtml = `
+      <div class="ind-card" style="grid-column: 1 / -1; margin-top: 16px;">
+        <div class="ind-title">🤖 主動式 ETF 經理人當日加減碼動態</div>
+        <div style="font-size:12px; color:var(--text3); padding:20px 0; text-align:center;">
+          今日此個股尚未被納入主動式 ETF 經理人的當日加減碼申報明細（或今日無持股變動）。
+        </div>
+      </div>`;
+    } else {
+      etfHtml = `
+      <div class="ind-card" style="grid-column: 1 / -1; margin-top: 16px;">
+        <div class="ind-title">🤖 主動式 ETF 經理人當日加減碼動態</div>
+        <table style="width:100%; border-collapse:collapse; margin-top:10px; font-size:13px;">
+          <thead>
+            <tr style="border-bottom:1px solid var(--border2); text-align:left; color:var(--text3); font-size:11px; text-transform:uppercase;">
+              <th style="padding:8px 10px;">主動式 ETF</th>
+              <th style="padding:8px 10px;">操作</th>
+              <th style="padding:8px 10px; text-align:right;">異動股數</th>
+              <th style="padding:8px 10px; text-align:right;">比重變化</th>
+              <th style="padding:8px 10px; text-align:right;">當日持股</th>
+              <th style="padding:8px 10px; text-align:right;">當日權重</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${etfData.flow.map(f => `
+              <tr style="border-bottom:1px solid var(--border);">
+                <td style="padding:8px 10px; font-weight:600; color:var(--text);">${escapeHtml(f.etfName)} (${escapeHtml(f.etfCode)})</td>
+                <td style="padding:8px 10px;"><span class="badge ${f.changeShares > 0 ? 'badge-green' : 'badge-red'}">${escapeHtml(f.action)}</span></td>
+                <td style="padding:8px 10px; text-align:right; font-weight:700; color:${f.changeShares > 0 ? 'var(--green)' : 'var(--red)'}">${f.changeShares > 0 ? '+' : ''}${f.changeShares.toLocaleString()} 股</td>
+                <td style="padding:8px 10px; text-align:right; color:${f.changeWeight > 0 ? 'var(--green)' : 'var(--red)'}">${f.changeWeight > 0 ? '+' : ''}${f.changeWeight.toFixed(2)}%</td>
+                <td style="padding:8px 10px; text-align:right; color:var(--text2);">${f.shares.toLocaleString()} 股</td>
+                <td style="padding:8px 10px; text-align:right; color:var(--text2);">${f.weight.toFixed(2)}%</td>
+              </tr>
+            `).join('')}
+          </tbody>
+        </table>
+        <div class="src-note" style="margin-top:8px;">比對基準日：${escapeHtml(etfData.date)}，前一日：${escapeHtml(etfData.comparedTo || '無歷史資料')}</div>
+      </div>`;
+    }
+  }
+
   el.innerHTML=`
   <div class="indicator-grid">
     <div class="ind-card"><div class="ind-title">📑 融資融券</div>
@@ -745,6 +801,7 @@ function renderChip(data){
       <div class="ind-row"><span class="ind-name">自營商買賣超</span><span class="ind-val">${fmtField(inst.dealerNet5d,num)}</span></div>
       <div class="ind-row"><span class="ind-name">外資連續買/賣超天數</span><span class="ind-val">${fmtField(inst.foreignConsecutiveDays,v=>Math.abs(v)+'天'+(v>0?'買超':v<0?'賣超':''))}</span></div>`}
     </div>
+    ${etfHtml}
   </div>
   <div class="disclaimer">⚠ 籌碼面資料僅供參考，不構成投資建議。資料來源：TWSE 台灣證券交易所、TDCC 台灣集中保管結算所。</div>`;
 }
@@ -762,6 +819,12 @@ async function fetchChipUS(symbol){
   const body=await res.json().catch(()=>({}));
   if(!res.ok) throw new Error(body?.error||'籌碼面資料取得失敗');
   return body;
+}
+
+async function fetchActiveEtfFlow(symbol){
+  const res=await fetch(`/api/active-etf-flow?symbol=${encodeURIComponent(symbol)}`);
+  if(!res.ok) return null;
+  return await res.json().catch(()=>null);
 }
 
 function renderChipUS(data){
@@ -1033,3 +1096,40 @@ function downloadReport(){
   a.remove();
 }
 document.getElementById('symbolInput').addEventListener('keydown',e=>{if(e.key==='Enter')analyze();});
+
+async function loadActiveEtfRankings() {
+  try {
+    const res = await fetch('/api/active-etf-flow');
+    if (!res.ok) return;
+    const data = await res.json().catch(() => null);
+    if (!data || !data.rankings) return;
+    const { date, rankings } = data;
+    const buys = rankings.buys || [];
+    const sells = rankings.sells || [];
+
+    if (buys.length === 0 && sells.length === 0) return;
+
+    document.getElementById('activeEtfRankingsDate').textContent = date ? `更新日期：${date}` : '';
+    
+    const buysHtml = buys.map(b => `
+      <div style="display:flex; justify-content:space-between; align-items:center; padding: 4px 0; border-bottom: 1px dashed var(--border);">
+        <span style="font-weight:600; cursor:pointer; color:var(--text);" onclick="quickLoad('${escapeHtml(b.stock_code)}')">${escapeHtml(b.stock_code)}</span>
+        <span class="up" style="font-weight:700;">+${(b.changeShares / 1000).toFixed(0)} 千股</span>
+      </div>
+    `).join('') || '<div style="color:var(--text3); text-align:center;">今日尚無買超記錄</div>';
+
+    const sellsHtml = sells.map(s => `
+      <div style="display:flex; justify-content:space-between; align-items:center; padding: 4px 0; border-bottom: 1px dashed var(--border);">
+        <span style="font-weight:600; cursor:pointer; color:var(--text);" onclick="quickLoad('${escapeHtml(s.stock_code)}')">${escapeHtml(s.stock_code)}</span>
+        <span class="down" style="font-weight:700;">${(s.changeShares / 1000).toFixed(0)} 千股</span>
+      </div>
+    `).join('') || '<div style="color:var(--text3); text-align:center;">今日尚無賣超記錄</div>';
+
+    document.getElementById('activeEtfTopBuys').innerHTML = buysHtml;
+    document.getElementById('activeEtfTopSells').innerHTML = sellsHtml;
+    document.getElementById('activeEtfRankings').style.display = 'block';
+  } catch (e) {
+    console.error('Failed to load active ETF rankings:', e);
+  }
+}
+loadActiveEtfRankings();
