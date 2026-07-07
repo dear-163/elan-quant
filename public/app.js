@@ -795,12 +795,12 @@ function renderChip(data, etfData, lc){
               return `
               <tr style="border-bottom:1px solid var(--border);">
                 <td style="padding:8px 10px; font-weight:600; color:var(--blue); cursor:pointer;" onclick="quickLoad('${escapeHtml(f.stockCode)}.TW')">${escapeHtml(f.stockName)} (${escapeHtml(f.stockCode)})</td>
-                <td style="padding:8px 10px;"><span class="badge ${hasBuy ? 'badge-green' : 'badge-red'}">${escapeHtml(f.action)}</span></td>
-                <td style="padding:8px 10px; text-align:right; font-weight:700; color:${hasBuy ? 'var(--green)' : 'var(--red)'}">
+                <td style="padding:8px 10px;"><span class="badge ${hasBuy ? 'badge-red' : 'badge-green'}">${escapeHtml(f.action)}</span></td>
+                <td style="padding:8px 10px; text-align:right; font-weight:700; color:${hasBuy ? 'var(--red)' : 'var(--green)'}">
                   <div>${hasBuy ? '+' : ''}${f.changeShares.toLocaleString()} 股</div>
-                  <div style="font-size:10px; font-weight:normal; opacity:.7; color:${f.changeAmount > 0 ? 'var(--green)' : 'var(--red)'}">${f.changeAmount > 0 ? '+' : ''}${fmtAmt(f.changeAmount)}</div>
+                  <div style="font-size:10px; font-weight:normal; opacity:.7; color:${f.changeAmount > 0 ? 'var(--red)' : 'var(--green)'}">${f.changeAmount > 0 ? '+' : ''}${fmtAmt(f.changeAmount)}</div>
                 </td>
-                <td style="padding:8px 10px; text-align:right; color:${f.changeWeight > 0 ? 'var(--green)' : 'var(--red)'}">${f.changeWeight > 0 ? '+' : ''}${f.changeWeight.toFixed(2)}%</td>
+                <td style="padding:8px 10px; text-align:right; color:${f.changeWeight > 0 ? 'var(--red)' : 'var(--green)'}">${f.changeWeight > 0 ? '+' : ''}${f.changeWeight.toFixed(2)}%</td>
                 <td style="padding:8px 10px; text-align:right; color:var(--text2);">
                   <div>${f.shares.toLocaleString()} 股</div>
                   <div style="font-size:10px; opacity:.7;">${fmtAmt(f.totalAmount)}</div>
@@ -836,12 +836,12 @@ function renderChip(data, etfData, lc){
               return `
               <tr style="border-bottom:1px solid var(--border);">
                 <td style="padding:8px 10px; font-weight:600; color:var(--text);">${escapeHtml(f.etfName)} (${escapeHtml(f.etfCode)})</td>
-                <td style="padding:8px 10px;"><span class="badge ${hasBuy ? 'badge-green' : 'badge-red'}">${escapeHtml(f.action)}</span></td>
-                <td style="padding:8px 10px; text-align:right; font-weight:700; color:${hasBuy ? 'var(--green)' : 'var(--red)'}">
+                <td style="padding:8px 10px;"><span class="badge ${hasBuy ? 'badge-red' : 'badge-green'}">${escapeHtml(f.action)}</span></td>
+                <td style="padding:8px 10px; text-align:right; font-weight:700; color:${hasBuy ? 'var(--red)' : 'var(--green)'}">
                   <div>${hasBuy ? '+' : ''}${f.changeShares.toLocaleString()} 股</div>
-                  <div style="font-size:10px; font-weight:normal; opacity:.7; color:${changeAmount > 0 ? 'var(--green)' : 'var(--red)'}">${changeAmount > 0 ? '+' : ''}${fmtAmt(changeAmount)}</div>
+                  <div style="font-size:10px; font-weight:normal; opacity:.7; color:${changeAmount > 0 ? 'var(--red)' : 'var(--green)'}">${changeAmount > 0 ? '+' : ''}${fmtAmt(changeAmount)}</div>
                 </td>
-                <td style="padding:8px 10px; text-align:right; color:${f.changeWeight > 0 ? 'var(--green)' : 'var(--red)'}">${f.changeWeight > 0 ? '+' : ''}${f.changeWeight.toFixed(2)}%</td>
+                <td style="padding:8px 10px; text-align:right; color:${f.changeWeight > 0 ? 'var(--red)' : 'var(--green)'}">${f.changeWeight > 0 ? '+' : ''}${f.changeWeight.toFixed(2)}%</td>
                 <td style="padding:8px 10px; text-align:right; color:var(--text2);">
                   <div>${f.shares.toLocaleString()} 股</div>
                   <div style="font-size:10px; opacity:.7;">${fmtAmt(totalAmount)}</div>
