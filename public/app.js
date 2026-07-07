@@ -108,13 +108,14 @@ async function analyze(){
     // halved, especially since chip.js does non-trivial work server-side (TDCC CSV parse + T86 calls).
     const resolvedSym=info.symbol||sym;
     const isTW=isTaiwanSymbol(resolvedSym);
+    const lc=data[data.length-1].close;
     await Promise.all([
       (isTW 
         ? Promise.all([fetchChip(resolvedSym), fetchActiveEtfFlow(resolvedSym).catch(() => null)])
             .then(([d, etf]) => {
               if(myGen!==analyzeGeneration) return;
               chipData=d;
-              renderChip(d, etf);
+              renderChip(d, etf, lc);
             })
         : fetchChipUS(resolvedSym).then(d => {
               if(myGen!==analyzeGeneration) return;
@@ -728,7 +729,7 @@ async function fetchChip(symbol){
   return body;
 }
 
-function renderChip(data, etfData){
+function renderChip(data, etfData, lc){
   const el=document.getElementById('chipContent');
   const m=data.margin||{},h=data.holders||{},inst=data.institutional||{};
   const pct=v=>(v*100).toFixed(2)+'%';
@@ -762,24 +763,31 @@ function renderChip(data, etfData){
               <th style="padding:8px 10px;">操作</th>
               <th style="padding:8px 10px; text-align:right;">異動股數 / 金額</th>
               <th style="padding:8px 10px; text-align:right;">比重變化</th>
-              <th style="padding:8px 10px; text-align:right;">當日持股</th>
+              <th style="padding:8px 10px; text-align:right;">當日持股 / 金額</th>
               <th style="padding:8px 10px; text-align:right;">當日權重</th>
             </tr>
           </thead>
           <tbody>
-            ${etfData.flow.map(f => `
+            ${etfData.flow.map(f => {
+              const changeAmount = f.changeShares * lc;
+              const totalAmount = f.shares * lc;
+              return `
               <tr style="border-bottom:1px solid var(--border);">
                 <td style="padding:8px 10px; font-weight:600; color:var(--text);">${escapeHtml(f.etfName)} (${escapeHtml(f.etfCode)})</td>
                 <td style="padding:8px 10px;"><span class="badge ${f.changeShares > 0 ? 'badge-green' : 'badge-red'}">${escapeHtml(f.action)}</span></td>
                 <td style="padding:8px 10px; text-align:right; font-weight:700; color:${f.changeShares > 0 ? 'var(--green)' : 'var(--red)'}">
                   <div>${f.changeShares > 0 ? '+' : ''}${f.changeShares.toLocaleString()} 股</div>
-                  <div style="font-size:10px; font-weight:normal; opacity:.7; color:${f.changeAmount > 0 ? 'var(--green)' : 'var(--red)'}">${f.changeAmount > 0 ? '+' : ''}${fmtAmt(f.changeAmount)}</div>
+                  <div style="font-size:10px; font-weight:normal; opacity:.7; color:${changeAmount > 0 ? 'var(--green)' : 'var(--red)'}">${changeAmount > 0 ? '+' : ''}${fmtAmt(changeAmount)}</div>
                 </td>
                 <td style="padding:8px 10px; text-align:right; color:${f.changeWeight > 0 ? 'var(--green)' : 'var(--red)'}">${f.changeWeight > 0 ? '+' : ''}${f.changeWeight.toFixed(2)}%</td>
-                <td style="padding:8px 10px; text-align:right; color:var(--text2);">${f.shares.toLocaleString()} 股</td>
+                <td style="padding:8px 10px; text-align:right; color:var(--text2);">
+                  <div>${f.shares.toLocaleString()} 股</div>
+                  <div style="font-size:10px; opacity:.7;">${fmtAmt(totalAmount)}</div>
+                </td>
                 <td style="padding:8px 10px; text-align:right; color:var(--text2);">${f.weight.toFixed(2)}%</td>
               </tr>
-            `).join('')}
+              `;
+            }).join('')}
           </tbody>
         </table>
         <div class="src-note" style="margin-top:8px;">比對基準日：${escapeHtml(etfData.date)}，前一日：${escapeHtml(etfData.comparedTo || '無歷史資料')}</div>
