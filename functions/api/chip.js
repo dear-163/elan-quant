@@ -96,6 +96,12 @@ async function fetchHolderDistribution(stockCode, env) {
     let weeklyChange = { value: null, source, note: '暫無資料（歷史快照尚未累積滿2週）' };
     if (env?.ELAN_QUANT_DB) {
       try {
+        if (bigHolderPct != null) {
+          await env.ELAN_QUANT_DB
+            .prepare('INSERT OR IGNORE INTO holder_weekly_snapshot (code, date, big_holder_pct, mid_holder_pct) VALUES (?, ?, ?, ?)')
+            .bind(stockCode, dataDate, bigHolderPct, foundMid > 0 ? midHolderPct : null)
+            .run();
+        }
         const prev = await env.ELAN_QUANT_DB
           .prepare('SELECT date, big_holder_pct FROM holder_weekly_snapshot WHERE code = ? AND date < ? ORDER BY date DESC LIMIT 1')
           .bind(stockCode, dataDate)
@@ -104,7 +110,7 @@ async function fetchHolderDistribution(stockCode, env) {
           weeklyChange = { value: bigHolderPct - prev.big_holder_pct, source, date: isoDate, comparedTo: isoFromRocOrAd(prev.date) };
         }
       } catch (e) {
-        weeklyChange = { value: null, source, note: `查詢歷史快照失敗：${e.message}` };
+        weeklyChange = { value: null, source, note: `查詢/寫入歷史快照失敗：${e.message}` };
       }
     } else {
       weeklyChange = { value: null, source, note: '暫無資料（D1 尚未綁定，無法比對歷史週快照）' };
