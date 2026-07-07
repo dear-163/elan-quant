@@ -108,7 +108,7 @@ async function analyze(){
     // halved, especially since chip.js does non-trivial work server-side (TDCC CSV parse + T86 calls).
     const resolvedSym=info.symbol||sym;
     const isTW=isTaiwanSymbol(resolvedSym);
-    const lc=data[data.length-1].close;
+    const lc=typeof info.regularMarketPrice==='number'?info.regularMarketPrice:data[data.length-1].close;
     await Promise.all([
       (isTW 
         ? Promise.all([fetchChip(resolvedSym), fetchActiveEtfFlow(resolvedSym).catch(() => null)])
@@ -255,7 +255,8 @@ function calcTechSignals(data, info) {
 
 function buildTechSummary(sym,data,info){
   const c=data.map(d=>d.close);
-  const lc=c[c.length-1],pc=c[c.length-2]??lc;
+  const lc=typeof info.regularMarketPrice==='number'?info.regularMarketPrice:c[c.length-1];
+  const pc=typeof info.regularMarketPreviousClose==='number'?info.regularMarketPreviousClose:(info.previousClose||c[c.length-2]||lc);
   const allHighs=data.map(d=>d.high).filter(Boolean);
   const allLows=data.map(d=>d.low).filter(Boolean);
   const h52=typeof info.fiftyTwoWeekHigh==='number'?info.fiftyTwoWeekHigh.toFixed(2):(allHighs.length?Math.max(...allHighs).toFixed(2):'N/A');
@@ -341,7 +342,10 @@ function renderTech(symbol,data,info){
   const c=data.map(d=>d.close);
   const ma10=sma(c,10),ma60=sma(c,60);
   const lMA10=last(ma10),lMA60=last(ma60);
-  const lc=c[c.length-1],pc=c[c.length-2]??lc,chg=lc-pc,chgPct=chg/pc*100;
+  const lc=typeof info.regularMarketPrice==='number'?info.regularMarketPrice:c[c.length-1];
+  const pc=typeof info.regularMarketPreviousClose==='number'?info.regularMarketPreviousClose:(info.previousClose||c[c.length-2]||lc);
+  const chg=lc-pc;
+  const chgPct=pc?chg/pc*100:0;
   
   const labels=data.map(d=>d.date.toLocaleDateString('zh-TW',{month:'short',day:'numeric'}));
   const signals=calcTechSignals(data,info);
