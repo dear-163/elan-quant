@@ -46,7 +46,8 @@ export async function onRequestGet(context) {
       '5347': '世界先進', '2303': '聯電', '2603': '長榮', '3231': '緯創', '2376': '技嘉',
       '2383': '台光電', '5274': '信驊', '2449': '京元電', '6515': '穎崴',
       '2327': '國巨', '2345': '智邦', '3008': '大立光', '3711': '日月光投控', '2881': '富邦金',
-      '2882': '國泰金', '2301': '光寶科', '2357': '華碩', '3034': '聯詠', '2408': '南亞科'
+      '2882': '國泰金', '2301': '光寶科', '2357': '華碩', '3034': '聯詠', '2408': '南亞科',
+      '3017': '奇鋐', '3037': '欣興', '6223': '旺矽', '6669': '緯穎'
     };
 
     // IF symbol is specified: return specific stock flow or active ETF flow (Option A/C)
@@ -80,6 +81,8 @@ export async function onRequestGet(context) {
           const t = item.today;
           const y = item.yesterday;
 
+          if (!t) continue;
+
           let changeShares = 0;
           let changeWeight = 0;
           let action = '無變動';
@@ -90,9 +93,6 @@ export async function onRequestGet(context) {
           } else if (t) {
             changeShares = t.shares;
             changeWeight = t.weight;
-          } else if (y) {
-            changeShares = -y.shares;
-            changeWeight = -y.weight;
           }
 
           if (changeShares > 0) action = '加碼';
