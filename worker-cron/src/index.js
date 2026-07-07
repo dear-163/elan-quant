@@ -198,6 +198,52 @@ async function updateHolderSnapshotIfNewWeek(db) {
   return { skipped: false, date: tdccDate, stockCount: perCode.size };
 }
 
+async function fetchAndStoreActiveEtfHoldings(db, todayAd) {
+  const etfs = [
+    { code: '00981A', name: '主動統一台股增長主動式ETF', moneydjCode: '00981A.TW' },
+    { code: '00980A', name: '野村臺灣智慧優選主動式ETF', moneydjCode: '00980A.TW' }
+  ];
+
+  for (const etf of etfs) {
+    try {
+      const url = `https://www.moneydj.com/etf/x/basic/basic0007.xdjhtm?etfid=${etf.moneydjCode}`;
+      const res = await fetch(url, { headers: { 'User-Agent': 'Mozilla/5.0' } });
+      if (!res.ok) {
+        console.error(`[cron-etf] Fetching ${etf.code} from MoneyDJ failed: HTTP ${res.status}`);
+        continue;
+      }
+      const html = await res.text();
+      const regex = /etfid=(\d{4,6})\.(TW|TWO)[^>]*>([^<\(]+)\(\1\.\2\)<\/a><\/td><td[^>]*>([0-9.]+)<\/td><td[^>]*>([0-9,.-]+)<\/td>/gi;
+
+      let match;
+      const holdings = [];
+      while ((match = regex.exec(html)) !== null) {
+        holdings.push({
+          stockCode: match[1],
+          weight: parseFloat(match[4]),
+          shares: parseFloat(match[5].replace(/,/g, ''))
+        });
+      }
+
+      if (holdings.length === 0) {
+        console.error(`[cron-etf] parsed 0 holdings for ${etf.code}`);
+        continue;
+      }
+
+      const statements = holdings.map(h => {
+        return db.prepare(
+          'INSERT OR REPLACE INTO active_etf_holdings (etf_code, etf_name, stock_code, date, shares, weight) VALUES (?, ?, ?, ?, ?, ?)'
+        ).bind(etf.code, etf.name, h.stockCode, todayAd, h.shares, h.weight);
+      });
+
+      await db.batch(statements);
+      console.log(`[cron-etf] successfully stored ${holdings.length} holdings for ${etf.code} on ${todayAd}`);
+    } catch (e) {
+      console.error(`[cron-etf] Error crawling ${etf.code}:`, e.message);
+    }
+  }
+}
+
 export default {
   async scheduled(event, env, ctx) {
     const db = env.ELAN_QUANT_DB;
@@ -260,5 +306,10 @@ export default {
       const holderResult = await updateHolderSnapshotIfNewWeek(db);
       console.log('[cron] holder_weekly_snapshot：', JSON.stringify(holderResult));
     } catch (e) { console.error('[cron] 更新大戶持股週快照失敗：', e.message); }
+
+    try {
+      await fetchAndStoreActiveEtfHoldings(db, todayAd);
+      console.log('[cron] 主動式 ETF 持股爬蟲執行完成');
+    } catch (e) { console.error('[cron] 主動式 ETF 持股爬蟲失敗：', e.message); }
   },
 };
