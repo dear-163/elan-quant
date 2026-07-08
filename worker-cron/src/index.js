@@ -112,6 +112,30 @@ async function fetchStockDayAll() {
   return arr;
 }
 
+async function fetchTpexStockDayAll() {
+  try {
+    const res = await fetch('https://www.tpex.org.tw/openapi/v1/tpex_mainboard_daily_close_quotes', { headers: BROWSER_HEADERS });
+    if (!res.ok) {
+      console.error(`TPEx OpenAPI HTTP ${res.status}`);
+      return [];
+    }
+    const arr = await res.json();
+    if (!Array.isArray(arr)) {
+      console.error('TPEx OpenAPI Response is not an array');
+      return [];
+    }
+    return arr.map(r => ({
+      Code: (r.SecuritiesCompanyCode || '').trim(),
+      ClosingPrice: r.Close,
+      HighestPrice: r.High,
+      LowestPrice: r.Low
+    }));
+  } catch (e) {
+    console.error('Failed to fetch TPEx prices:', e.message);
+    return [];
+  }
+}
+
 async function batchRun(db, statements, chunkSize = 50) {
   for (let i = 0; i < statements.length; i += chunkSize) {
     await db.batch(statements.slice(i, i + chunkSize));
@@ -517,7 +541,9 @@ export default {
 
     try {
       const stockRows = await fetchStockDayAll();
-      const { newHighs, newLows } = await updateStockPricesAndCountNewHighLow(db, todayAd, stockRows);
+      const tpexRows = await fetchTpexStockDayAll();
+      const mergedRows = stockRows.concat(tpexRows);
+      const { newHighs, newLows } = await updateStockPricesAndCountNewHighLow(db, todayAd, mergedRows);
       dayData.new_highs = newHighs;
       dayData.new_lows = newLows;
     } catch (e) { console.error('[cron] 更新個股價格/計算創新高低失敗：', e.message); }

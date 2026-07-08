@@ -65,7 +65,14 @@ export async function onRequestGet(context) {
       '2383': '台光電', '5274': '信驊', '2449': '京元電', '6515': '穎崴',
       '2327': '國巨', '2345': '智邦', '3008': '大立光', '3711': '日月光投控', '2881': '富邦金',
       '2882': '國泰金', '2301': '光寶科', '2357': '華碩', '3034': '聯詠', '2408': '南亞科',
-      '3017': '奇鋐', '3037': '欣興', '6223': '旺矽', '6669': '緯穎'
+      '3017': '奇鋐', '3037': '欣興', '6223': '旺矽', '6669': '緯穎',
+      '1590': '亞德客-KY', '1815': '富喬', '2002': '中鋼', '2313': '華通', '2368': '金像電',
+      '2439': '美律', '2481': '強茂', '3264': '超豐', '3376': '新日興', '3443': '創意',
+      '3533': '嘉澤', '3653': '健策', '3661': '世芯-KY', '3665': '貿聯-KY', '4958': '臻鼎-KY',
+      '4966': '譜瑞-KY', '5439': '豐藝', '6147': '淇譽電', '6187': '萬潤', '6191': '精成科',
+      '6271': '同欣電', '6274': '台燿', '6278': '台表科', '6488': '環球晶', '6510': '精測',
+      '6805': '富世達', '8046': '南電', '8150': '南茂', '8210': '勤誠', '8358': '金居',
+      '8996': '高力'
     };
 
     // IF symbol is specified: return specific stock flow or active ETF flow (Option A/C)
@@ -92,6 +99,19 @@ export async function onRequestGet(context) {
           }
           if (r.date === todayDate) stockMap[r.stock_code].today = r;
           else stockMap[r.stock_code].yesterday = r;
+        }
+
+        const missingPriceCodes = [];
+        for (const code in stockMap) {
+          if (priceMap[code] == null) {
+            missingPriceCodes.push(code);
+          }
+        }
+        if (missingPriceCodes.length > 0) {
+          const yahooPrices = await fetchMissingPricesFromYahoo(missingPriceCodes, env);
+          for (const code in yahooPrices) {
+            priceMap[code] = yahooPrices[code];
+          }
         }
 
         const flow = [];
@@ -145,7 +165,11 @@ export async function onRequestGet(context) {
         return json({ date: todayDate, symbol, flow: [], note: '非台股純數字代號，暫不支援主動式 ETF 追蹤。' });
       }
       const stockCode = match[1];
-      const price = priceMap[stockCode] || null;
+      let price = priceMap[stockCode] || null;
+      if (price == null) {
+        const yahooPrices = await fetchMissingPricesFromYahoo([stockCode], env);
+        price = yahooPrices[stockCode] || null;
+      }
 
       // Query database for this stock on these dates
       const querySql = yesterdayDate
@@ -235,6 +259,19 @@ export async function onRequestGet(context) {
       else stockChanges[r.stock_code].yesterdayShares += r.shares;
     }
 
+    const missingRankingsCodes = [];
+    for (const code in stockChanges) {
+      if (priceMap[code] == null && (stockChanges[code].todayShares - stockChanges[code].yesterdayShares !== 0)) {
+        missingRankingsCodes.push(code);
+      }
+    }
+    if (missingRankingsCodes.length > 0) {
+      const yahooPrices = await fetchMissingPricesFromYahoo(missingRankingsCodes, env);
+      for (const code in yahooPrices) {
+        priceMap[code] = yahooPrices[code];
+      }
+    }
+
     const changes = [];
     for (const code in stockChanges) {
       const item = stockChanges[code];
@@ -265,5 +302,76 @@ export async function onRequestGet(context) {
 
   } catch (error) {
     return json({ error: `查詢主動式 ETF 籌碼數據失敗：${error.message}` }, 500);
+  }
+}
+
+const YAHOO_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36';
+const BROWSER_HEADERS = { 
+  'Accept': 'application/json', 
+  'User-Agent': YAHOO_UA,
+  'Referer': 'https://www.tpex.org.tw/'
+};
+
+async function getYahooCrumb(env) {
+  const cacheKey = 'yahoo:crumb';
+  if (env?.RATE_LIMIT_KV) {
+    try {
+      const cached = await env.RATE_LIMIT_KV.get(cacheKey, 'json');
+      if (cached?.cookie && cached?.crumb) return cached;
+    } catch {}
+  }
+  try {
+    const cookieRes = await fetch('https://fc.yahoo.com', { headers: { 'User-Agent': YAHOO_UA } });
+    const setCookie = cookieRes.headers.get('set-cookie');
+    if (!setCookie) return null;
+    const cookie = setCookie.split(';')[0];
+    const crumbRes = await fetch('https://query2.finance.yahoo.com/v1/test/getcrumb', {
+      headers: { 'User-Agent': YAHOO_UA, 'Cookie': cookie },
+    });
+    if (!crumbRes.ok) return null;
+    const crumb = (await crumbRes.text()).trim();
+    if (!crumb || crumb.includes('<')) return null;
+    const result = { cookie, crumb };
+    if (env?.RATE_LIMIT_KV) {
+      try { await env.RATE_LIMIT_KV.put(cacheKey, JSON.stringify(result), { expirationTtl: 1200 }); } catch {}
+    }
+    return result;
+  } catch {
+    return null;
+  }
+}
+
+async function fetchMissingPricesFromYahoo(codes, env) {
+  if (!codes || codes.length === 0) return {};
+  const auth = await getYahooCrumb(env);
+  if (!auth) return {};
+  
+  const ySymbols = [];
+  for (const c of codes) {
+    ySymbols.push(`${c}.TW`);
+    ySymbols.push(`${c}.TWO`);
+  }
+  
+  try {
+    const target = `https://query2.finance.yahoo.com/v7/finance/quote?symbols=${ySymbols.join(',')}&crumb=${encodeURIComponent(auth.crumb)}`;
+    const res = await fetch(target, {
+      headers: {
+        ...BROWSER_HEADERS,
+        'Cookie': auth.cookie
+      }
+    });
+    if (!res.ok) return {};
+    const j = await res.json();
+    const results = j?.quoteResponse?.result || [];
+    const map = {};
+    for (const r of results) {
+      const code = r.symbol.replace(/\.TWO?$/i, '');
+      if (r.regularMarketPrice != null) {
+        map[code] = r.regularMarketPrice;
+      }
+    }
+    return map;
+  } catch {
+    return {};
   }
 }
