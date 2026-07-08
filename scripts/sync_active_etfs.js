@@ -34,6 +34,9 @@ const etfs = [
   { code: '00986A', name: '台新龍頭成長主動式ETF', source: 'taishin', fundCode: '00986A' },
   { code: '00987A', name: '台新優勢成長主動式ETF', source: 'taishin', fundCode: '00987A' },
   { code: '00404A', name: '聯博動能50主動式ETF', source: 'ab', fundCode: 'TW00000404A5' },
+  { code: '00406A', name: '中信台灣收益主動式ETF', source: 'ctbc', fundCode: 'E0038' },
+  { code: '00983A', name: '中信ARK創新主動式ETF', source: 'ctbc', fundCode: 'E0034' },
+  { code: '00995A', name: '中信台灣卓越主動式ETF', source: 'ctbc', fundCode: 'E0036' },
 ];
 
 // ezmoney.com.tw（統一投信官網）對第一次沒帶反爬蟲 cookie 的請求，永遠回傳 302 重新導向回同一個
@@ -213,6 +216,50 @@ async function fetchAllianceBernsteinHoldings(shareClassId) {
   return out;
 }
 
+// 中國信託投信（ctbcinvestments.com.tw）擋在 Imperva Incapsula 反爬蟲後面，但只要 cookie
+// 帶對就不用登入。三步：1) 隨便一個 ETF 頁面拿 Incapsula cookie 2) 用該 cookie 換一次性
+// token 3) 帶 cookie+token 打完整持股 API。FID（如 E0038）是內部代碼，跟公開股票代號不同。
+async function fetchCtbcHoldings(fid) {
+  const cno = '00682450';
+  const headers = { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' };
+  const referer = `https://www.ctbcinvestments.com.tw/Etf/${cno}/Info`;
+
+  const primeRes = await fetch(referer, { headers });
+  const cookies = [];
+  const primeCookie = primeRes.headers.get('set-cookie');
+  if (primeCookie) cookies.push(...primeCookie.split(',').map(c => c.split(';')[0].trim()));
+  if (cookies.length === 0) throw new Error('中信投信首次請求未回傳 Incapsula cookie，防爬機制可能已變更');
+
+  const tokenRes = await fetch('https://www.ctbcinvestments.com.tw/API/home/AuthToken?token=www.ctbcinvestments.com', {
+    method: 'POST',
+    headers: { ...headers, 'Content-Type': 'application/json; charset=utf-8', Referer: referer, Origin: 'https://www.ctbcinvestments.com.tw', Cookie: cookies.join('; ') },
+    body: '{}',
+  });
+  if (!tokenRes.ok) throw new Error(`中信投信 token HTTP ${tokenRes.status}`);
+  const tokenCookie = tokenRes.headers.get('set-cookie');
+  if (tokenCookie) cookies.push(...tokenCookie.split(',').map(c => c.split(';')[0].trim()));
+  const tokenJson = await tokenRes.json();
+  const token = tokenJson?.Data?.token;
+  if (!token) throw new Error('中信投信未回傳 auth token');
+
+  const todayIso = new Date().toISOString().slice(0, 10);
+  const res = await fetch(`https://www.ctbcinvestments.com.tw/API/etf/ETFHoldingWeight?token=${encodeURIComponent(token)}`, {
+    method: 'POST',
+    headers: { ...headers, 'Content-Type': 'application/json; charset=utf-8', Referer: referer, Origin: 'https://www.ctbcinvestments.com.tw', Cookie: cookies.join('; ') },
+    body: JSON.stringify({ FID: fid, StartDate: todayIso }),
+  });
+  if (!res.ok) throw new Error(`中信投信 API HTTP ${res.status}`);
+  const apiRes = await res.json();
+  if (apiRes.ResultCode !== 0) throw new Error(`中信投信 API 回應錯誤：${apiRes.ResultMsg || apiRes.ResultCode}`);
+  const detail = apiRes?.Data?.FundAssetsDetail || [];
+  const stockSection = detail.find(s => s.Code === 'STOCK');
+  if (!stockSection) throw new Error('中信投信 API 回應格式跟預期不符（找不到股票區塊）');
+  return stockSection.Data.map(r => ({
+    stockCode: r.code_,
+    shares: parseFloat(String(r.qty_).replace(/,/g, '')), weight: parseFloat(r.weights_),
+  }));
+}
+
 const FETCHERS = {
   ezmoney: fetchEzmoneyHoldings,
   nomura: fetchNomuraHoldings,
@@ -221,6 +268,7 @@ const FETCHERS = {
   allianz: fetchAllianzHoldings,
   taishin: fetchTaishinHoldings,
   ab: fetchAllianceBernsteinHoldings,
+  ctbc: fetchCtbcHoldings,
 };
 
 async function main() {
