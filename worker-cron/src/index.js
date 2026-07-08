@@ -260,6 +260,127 @@ async function fetchNomuraHoldings(fundId) {
   }));
 }
 
+// 解碼 HTML entity（十六進位/十進位數字實體 + 常見具名實體），Workers 環境沒有 DOM 可用。
+function decodeHtmlEntities(s) {
+  return s
+    .replace(/&#x([0-9A-Fa-f]+);/g, (_, h) => String.fromCodePoint(parseInt(h, 16)))
+    .replace(/&#(\d+);/g, (_, d) => String.fromCodePoint(parseInt(d, 10)))
+    .replace(/&quot;/g, '"').replace(/&#39;/g, "'")
+    .replace(/&lt;/g, '<').replace(/&gt;/g, '>')
+    .replace(/&amp;/g, '&');
+}
+
+// 凱基投信官網：伺服器端直接渲染，完整持股表格（含隱藏的「顯示更多」列）已經在原始 HTML
+// 裡，不用額外打 API。頁面裡這個表格出現兩次（桌面版+隱藏的行動版），只取第一次出現的區塊，
+// 否則會算兩倍。
+async function fetchKgifundHoldings(fundId) {
+  const res = await fetch(`https://www.kgifund.com.tw/Fund/Detail?fundID=${fundId}`, {
+    headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' },
+  });
+  if (!res.ok) throw new Error(`凱基投信 HTTP ${res.status}`);
+  const html = await res.text();
+  const marker = 'js-table-a-0';
+  const markerIdx = html.indexOf(marker);
+  if (markerIdx === -1) throw new Error('凱基投信頁面內找不到持股表格（版面可能已變更）');
+  const tableStart = html.lastIndexOf('<table', markerIdx);
+  const tableEnd = html.indexOf('</table>', markerIdx) + '</table>'.length;
+  const tableHtml = html.slice(tableStart, tableEnd);
+  const rows = [...tableHtml.matchAll(/<tr name="content"[^>]*>([\s\S]*?)<\/tr>/g)];
+  return rows.map(m => {
+    const cells = [...m[1].matchAll(/<td[^>]*>([\s\S]*?)<\/td>/g)].map(c => decodeHtmlEntities(c[1].replace(/<[^>]+>/g, '')).trim());
+    return { stockCode: cells[0], stockName: cells[1], shares: parseFloat(cells[2].replace(/,/g, '')), weight: parseFloat(cells[3]) };
+  }).filter(h => /^\d{4,6}$/.test(h.stockCode));
+}
+
+// 富邦投信旗下 ETF 微站（fsit.com.tw），純伺服器渲染 HTML，不用 cookie、不用登入。
+async function fetchFubonHoldings(ticker) {
+  const res = await fetch(`https://websys.fsit.com.tw/FubonETF/Fund/Assets.aspx?stkId=${ticker}`, {
+    headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' },
+  });
+  if (!res.ok) throw new Error(`富邦投信 HTTP ${res.status}`);
+  const html = await res.text();
+  const rows = [...html.matchAll(/<tr>\s*<td class="tac">(\d{4,6})<\/td>\s*<td>([^<]+)<\/td>\s*<td class="tac">([\d,]+)<\/td>\s*<td class="tac">[\d,]+<\/td>\s*<td class="tac">([\d.]+)<\/td>\s*<\/tr>/g)];
+  if (rows.length === 0) throw new Error('富邦投信頁面內找不到持股表格（版面可能已變更）');
+  return rows.map(m => ({ stockCode: m[1], stockName: m[2].trim(), shares: parseFloat(m[3].replace(/,/g, '')), weight: parseFloat(m[4]) }));
+}
+
+// 安聯投信（etf.allianzgi.com.tw）背後是共用的白牌 ETF 平台，需要三步：
+// 1) 拿 XSRF token/cookie 2) （已知 fundNo 對照表，不用每次查）3) 帶 token 打 GetFundAssets。
+async function fetchAllianzHoldings(fundNo) {
+  const tokenRes = await fetch('https://etf.allianzgi.com.tw/webapi/api/AntiForgery/GetAntiForgeryToken', {
+    headers: { 'Accept': 'application/json', 'User-Agent': 'Mozilla/5.0' },
+  });
+  if (!tokenRes.ok) throw new Error(`安聯投信 token HTTP ${tokenRes.status}`);
+  const setCookie = tokenRes.headers.get('set-cookie');
+  const tokenJson = await tokenRes.json();
+  const xsrfToken = tokenJson.token;
+  if (!xsrfToken || !setCookie) throw new Error('安聯投信未回傳 XSRF token 或 cookie');
+  // Workers 的 fetch 對多個 Set-Cookie 只會合併成一行，直接整段轉發即可（不用逐一解析各自的 cookie 名稱）。
+  const cookie = setCookie.split(',').map(c => c.split(';')[0].trim()).join('; ');
+
+  const res = await fetch('https://etf.allianzgi.com.tw/webapi/api/Fund/GetFundAssets', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json', 'Accept': 'application/json',
+      'X-XSRF-TOKEN': xsrfToken, 'Cookie': cookie, 'User-Agent': 'Mozilla/5.0',
+      'Referer': `https://etf.allianzgi.com.tw/etf-info/${fundNo}?tab=4`,
+    },
+    body: JSON.stringify({ FundID: fundNo, SearchDate: null }),
+  });
+  if (!res.ok) throw new Error(`安聯投信 API HTTP ${res.status}`);
+  const apiRes = await res.json();
+  const table = (apiRes?.Entries?.Data?.Table || []).find(t => (t.TableTitle || '').includes('股票'));
+  if (!table || !Array.isArray(table.Rows)) throw new Error('安聯投信 API 回應格式跟預期不符（找不到股票表格）');
+  // Rows 是 [序號, 代號, 名稱, 股數, 權重%]，比野村/凱基多一欄序號。
+  return table.Rows.map(row => ({
+    stockCode: row[1], stockName: row[2],
+    shares: parseFloat(String(row[3]).replace(/,/g, '')), weight: parseFloat(row[4]),
+  })).filter(h => h.stockCode);
+}
+
+// 台新投信：純伺服器渲染 HTML，不用 cookie/登入。股票代號可能帶交易所後綴（如「2330 TT」
+// 台股、「GOOGL US」美股——這是跨市場配置的基金），只有純台股代號能對到我們自己
+// stock_daily_price 的收盤價，外國代號會誠實顯示「金額暫無資料」，不用特別處理。
+async function fetchTaishinHoldings(ticker) {
+  const res = await fetch(`https://www.tsit.com.tw/ETF/Home/ETFSeriesDetail/${ticker}`, {
+    headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' },
+  });
+  if (!res.ok) throw new Error(`台新投信 HTTP ${res.status}`);
+  const html = await res.text();
+  const marker = '股票合計';
+  const markerIdx = html.indexOf(marker);
+  if (markerIdx === -1) throw new Error('台新投信頁面內找不到持股表格（版面可能已變更）');
+  const tableStart = html.lastIndexOf('<table', markerIdx);
+  const tableEnd = html.indexOf('</table>', markerIdx) + '</table>'.length;
+  const tableHtml = html.slice(tableStart, tableEnd);
+  const rows = [...tableHtml.matchAll(/<tr>\s*<td>([^<]+)<\/td>\s*<td>([^<]+)<\/td>\s*<td>([^<]+)<\/td>\s*<td>([^<]+)<\/td>\s*<\/tr>/g)];
+  return rows
+    .map(m => ({ rawCode: m[1].trim(), stockName: m[2].trim(), shares: parseFloat(m[3].replace(/,/g, '')), weight: parseFloat(m[4]) }))
+    .filter(h => !h.rawCode.includes('合計'))
+    .map(h => {
+      const twMatch = h.rawCode.match(/^(\d{4,6})\s*TT$/i);
+      return { stockCode: twMatch ? twMatch[1] : h.rawCode, stockName: h.stockName, shares: h.shares, weight: h.weight };
+    });
+}
+
+// 聯博投信（全球共用平台 webapi.alliancebernstein.com），乾淨的公開 JSON API，不用任何
+// header/cookie。domesticHoldings 底下分好幾個區塊（股票／期貨／選擇權等），只保留代號是
+// 純數字（真台股代號）或含交易所後綴的股票列，期貨/選擇權沒有 holdingCode 會被濾掉。
+async function fetchAllianceBernsteinHoldings(shareClassId) {
+  const res = await fetch(`https://webapi.alliancebernstein.com/v2/funds/tw/zh-tw/investor/${shareClassId}/holdings`);
+  if (!res.ok) throw new Error(`聯博投信 API HTTP ${res.status}`);
+  const j = await res.json();
+  const sections = j?.domesticHoldings || [];
+  const out = [];
+  for (const section of sections) {
+    for (const h of (section.holdings || [])) {
+      if (!h.holdingCode) continue;
+      out.push({ stockCode: h.holdingCode, stockName: h.holding, shares: h.holdingShares, weight: parseFloat(h.holdingPerc) });
+    }
+  }
+  return out;
+}
+
 async function fetchAndStoreActiveEtfHoldings(db, todayDash) {
   const etfs = [
     { code: '00981A', name: '統一台股增長主動式ETF', source: 'ezmoney', fundCode: '49YTW' },
@@ -270,6 +391,14 @@ async function fetchAndStoreActiveEtfHoldings(db, todayDash) {
     { code: '00403A', name: '統一台股升級50主動式ETF', source: 'ezmoney', fundCode: '63YTW' },
     { code: '00985A', name: '野村台灣50主動式ETF', source: 'nomura', fundCode: '00985A' },
     { code: '00999A', name: '野村臺灣高息主動式ETF', source: 'nomura', fundCode: '00999A' },
+    { code: '00407A', name: '凱基台灣主動式ETF', source: 'kgifund', fundCode: 'J024' },
+    { code: '00405A', name: '富邦台灣龍耀主動式ETF', source: 'fubon', fundCode: '00405A' },
+    { code: '00984A', name: '安聯台灣高息主動式ETF', source: 'allianz', fundCode: 'E0001' },
+    { code: '00993A', name: '安聯台灣主動式ETF', source: 'allianz', fundCode: 'E0002' },
+    { code: '00402A', name: '安聯美國科技主動式ETF', source: 'allianz', fundCode: 'E0003' },
+    { code: '00986A', name: '台新龍頭成長主動式ETF', source: 'taishin', fundCode: '00986A' },
+    { code: '00987A', name: '台新優勢成長主動式ETF', source: 'taishin', fundCode: '00987A' },
+    { code: '00404A', name: '聯博動能50主動式ETF', source: 'ab', fundCode: 'TW00000404A5' },
   ];
 
   for (const etf of etfs) {
