@@ -22,6 +22,10 @@ console.log(`Starting live Active ETF holdings crawler & sync for date ${todayDa
 const etfs = [
   { code: '00981A', name: '統一台股增長主動式ETF', source: 'ezmoney', fundCode: '49YTW' },
   { code: '00980A', name: '野村臺灣智慧優選主動式ETF', source: 'nomura', fundCode: '00980A' },
+  { code: '00988A', name: '統一全球創新主動式ETF', source: 'ezmoney', fundCode: '61YTW' },
+  { code: '00403A', name: '統一台股升級50主動式ETF', source: 'ezmoney', fundCode: '63YTW' },
+  { code: '00985A', name: '野村台灣50主動式ETF', source: 'nomura', fundCode: '00985A' },
+  { code: '00999A', name: '野村臺灣高息主動式ETF', source: 'nomura', fundCode: '00999A' },
 ];
 
 // ezmoney.com.tw（統一投信官網）對第一次沒帶反爬蟲 cookie 的請求，永遠回傳 302 重新導向回同一個

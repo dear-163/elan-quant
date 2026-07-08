@@ -264,6 +264,12 @@ async function fetchAndStoreActiveEtfHoldings(db, todayDash) {
   const etfs = [
     { code: '00981A', name: '統一台股增長主動式ETF', source: 'ezmoney', fundCode: '49YTW' },
     { code: '00980A', name: '野村臺灣智慧優選主動式ETF', source: 'nomura', fundCode: '00980A' },
+    // 同一個發行公司的其他主動式ETF，用同一套抓取邏輯、只換基金代碼——61YTW/63YTW是在
+    // 00981A 那頁「旗下所有ETF」清單裡找到的，跟 49YTW 一樣是 ezmoney 內部代碼。
+    { code: '00988A', name: '統一全球創新主動式ETF', source: 'ezmoney', fundCode: '61YTW' },
+    { code: '00403A', name: '統一台股升級50主動式ETF', source: 'ezmoney', fundCode: '63YTW' },
+    { code: '00985A', name: '野村台灣50主動式ETF', source: 'nomura', fundCode: '00985A' },
+    { code: '00999A', name: '野村臺灣高息主動式ETF', source: 'nomura', fundCode: '00999A' },
   ];
 
   for (const etf of etfs) {
