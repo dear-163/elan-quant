@@ -330,6 +330,8 @@ async function fetchYahooQuoteSummary(symbol, base, env) {
           regularMarketDayHigh: base.regularMarketDayHigh || unwrap(p.regularMarketDayHigh),
           regularMarketDayLow: base.regularMarketDayLow || unwrap(p.regularMarketDayLow),
           regularMarketOpen: base.regularMarketOpen || unwrap(p.regularMarketOpen),
+          regularMarketPreviousClose: unwrap(p.regularMarketPreviousClose) || unwrap(sd.previousClose) || base.previousClose,
+          previousClose: unwrap(sd.previousClose) || unwrap(p.regularMarketPreviousClose) || base.previousClose,
           regularMarketVolume: base.regularMarketVolume || unwrap(p.regularMarketVolume),
           marketCap: unwrap(p.marketCap) || unwrap(sd.marketCap),
           fiftyTwoWeekHigh: base.fiftyTwoWeekHigh || unwrap(sd.fiftyTwoWeekHigh),

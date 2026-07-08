@@ -42,7 +42,15 @@ export async function onRequestGet(context) {
     // given code win, which in practice was often a stale price over a year old (e.g. TSMC's
     // 2025-06-11 close of 1065 instead of its actual latest close of ~2460).
     const priceRows = await env.ELAN_QUANT_DB
-      .prepare('SELECT code, close FROM stock_daily_price WHERE date = (SELECT MAX(date) FROM stock_daily_price)')
+      .prepare(`
+        SELECT p.code, p.close 
+        FROM stock_daily_price p
+        INNER JOIN (
+          SELECT code, MAX(date) as max_date 
+          FROM stock_daily_price 
+          GROUP BY code
+        ) m ON p.code = m.code AND p.date = m.max_date
+      `)
       .all();
     const priceMap = {};
     if (priceRows.results) {
