@@ -67,13 +67,66 @@ export async function onRequestGet(context) {
 
   const meta = await fetchQuoteInfo(resolvedSymbol, candles._meta || {}, env, userFmpKey);
   meta.symbol = resolvedSymbol;
+
+  // Yahoo's chart API for TWSE/TPEx symbols runs ~20 minutes behind (confirmed by comparing
+  // regularMarketTime against wall-clock time for multiple tickers) — that's Yahoo's own delayed-quote
+  // policy for this market, not something caching on our end causes. TWSE publishes its own near-real-time
+  // feed (~5-10s delay, same one most Taiwan finance sites use) for free with no key, so for TW symbols we
+  // overwrite the price with that instead, and surface the actual quote timestamp so the freshness is honest
+  // rather than implied. Historical candles still come from Yahoo — TWSE's MIS endpoint only gives a live snapshot.
+  let cacheSeconds = 45;
+  if (NON_US_SUFFIX.test(resolvedSymbol) && /\.(TW|TWO)$/i.test(resolvedSymbol)) {
+    const live = await fetchTwseMisRealtimePrice(resolvedSymbol);
+    if (live) {
+      meta.regularMarketPrice = live.price;
+      meta.quoteTime = live.time;
+      meta.quoteDate = live.date;
+      meta.quoteSource = 'TWSE 即時資訊';
+      cacheSeconds = 8;
+    }
+  }
+
   const responseBody = {
     candles: candles.map(c => ({ date: c.date.toISOString(), open: c.open, high: c.high, low: c.low, close: c.close, volume: c.volume })),
     meta,
   };
-  const response = json(responseBody, 200, { 'Cache-Control': 'public, max-age=45' });
+  const response = json(responseBody, 200, { 'Cache-Control': `public, max-age=${cacheSeconds}` });
   context.waitUntil(cache.put(cacheKey, response.clone()));
   return response;
+}
+
+// TWSE 官方「個股即時資訊」系統（mis.twse.com.tw），delay=0 是公開網頁本來就在用的準即時報價
+// （官方回應本身會標註 userDelay，實測約 5-10 秒，遠比 Yahoo 的 chart API 快）。z（成交價）在兩筆
+// 成交之間可能是 "-"（還沒有新成交），這時退回買賣五檔的中間價，再退回昨收，不留空白。
+async function fetchTwseMisRealtimePrice(symbol) {
+  try {
+    const code = symbol.replace(/\.(TW|TWO)$/i, '');
+    const isOtc = /\.TWO$/i.test(symbol);
+    const exCh = `${isOtc ? 'otc' : 'tse'}_${code}.tw`;
+    const url = `https://mis.twse.com.tw/stock/api/getStockInfo.jsp?ex_ch=${encodeURIComponent(exCh)}&json=1&delay=0&_=${Date.now()}`;
+    const res = await fetch(url, {
+      headers: { 'User-Agent': BROWSER_HEADERS['User-Agent'], 'Referer': `https://mis.twse.com.tw/stock/fibest.jsp?stock=${code}` },
+    });
+    if (!res.ok) return null;
+    const j = await res.json();
+    const row = j?.msgArray?.[0];
+    if (!row) return null;
+
+    let price = parseFloat(row.z);
+    if (!isFinite(price)) {
+      const bestAsk = parseFloat((row.a || '').split('_')[0]);
+      const bestBid = parseFloat((row.b || '').split('_')[0]);
+      if (isFinite(bestAsk) && isFinite(bestBid)) price = (bestAsk + bestBid) / 2;
+      else if (isFinite(bestBid)) price = bestBid;
+      else if (isFinite(bestAsk)) price = bestAsk;
+      else price = parseFloat(row.y);
+    }
+    if (!isFinite(price) || price <= 0) return null;
+
+    return { price, time: row.t || null, date: row.d || null };
+  } catch {
+    return null;
+  }
 }
 
 async function fetchYahooCandles(symbol, period, interval) {

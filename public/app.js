@@ -254,19 +254,30 @@ function calcTechSignals(data, info) {
   };
 }
 
-function buildTechSummary(sym,data,info){
+// 判斷「最新一根K棒」是不是今天，藉此決定昨收要用哪一根——不能單靠比較 regularMarketPrice
+// 是否等於K棒收盤價來猜（這只在兩者剛好來自同一份 Yahoo 快照時才準，換成 TWSE 即時報價後兩者
+// 幾乎不會剛好相等，比較日期才是穩定的做法）。台股有 quoteDate（TWSE 即時 API 回的官方日期）
+// 時直接比對；沒有的話（美股，或 TWSE 即時抓不到時）退回舊的數值比對法。
+function deriveLastAndPrevClose(data,info){
   const c=data.map(d=>d.close);
   const lc=typeof info.regularMarketPrice==='number'?info.regularMarketPrice:c[c.length-1];
   let pc;
-  if (typeof info.regularMarketPrice === 'number' && c.length > 0) {
-    if (Math.abs(c[c.length - 1] - info.regularMarketPrice) < 0.001) {
-      pc = c[c.length - 2] ?? c[c.length - 1];
-    } else {
-      pc = c[c.length - 1];
-    }
-  } else {
-    pc = c[c.length - 2] ?? c[c.length - 1];
+  const lastDate=data[data.length-1]?.date;
+  if(info.quoteDate&&lastDate){
+    const taipei=new Date(lastDate.getTime()+8*3600*1000);
+    const lastDateStr=`${taipei.getUTCFullYear()}${String(taipei.getUTCMonth()+1).padStart(2,'0')}${String(taipei.getUTCDate()).padStart(2,'0')}`;
+    pc=(lastDateStr===info.quoteDate)?(c[c.length-2]??c[c.length-1]):c[c.length-1];
+  }else if(typeof info.regularMarketPrice==='number'&&c.length>0){
+    pc=(Math.abs(c[c.length-1]-info.regularMarketPrice)<0.001)?(c[c.length-2]??c[c.length-1]):c[c.length-1];
+  }else{
+    pc=c[c.length-2]??c[c.length-1];
   }
+  return {lc,pc};
+}
+
+function buildTechSummary(sym,data,info){
+  const c=data.map(d=>d.close);
+  const {lc,pc}=deriveLastAndPrevClose(data,info);
   const allHighs=data.map(d=>d.high).filter(Boolean);
   const allLows=data.map(d=>d.low).filter(Boolean);
   const h52=typeof info.fiftyTwoWeekHigh==='number'?info.fiftyTwoWeekHigh.toFixed(2):(allHighs.length?Math.max(...allHighs).toFixed(2):'N/A');
@@ -352,17 +363,7 @@ function renderTech(symbol,data,info){
   const c=data.map(d=>d.close);
   const ma10=sma(c,10),ma60=sma(c,60);
   const lMA10=last(ma10),lMA60=last(ma60);
-  const lc=typeof info.regularMarketPrice==='number'?info.regularMarketPrice:c[c.length-1];
-  let pc;
-  if (typeof info.regularMarketPrice === 'number' && c.length > 0) {
-    if (Math.abs(c[c.length - 1] - info.regularMarketPrice) < 0.001) {
-      pc = c[c.length - 2] ?? c[c.length - 1];
-    } else {
-      pc = c[c.length - 1];
-    }
-  } else {
-    pc = c[c.length - 2] ?? c[c.length - 1];
-  }
+  const {lc,pc}=deriveLastAndPrevClose(data,info);
   const chg=lc-pc;
   const chgPct=pc?chg/pc*100:0;
   
@@ -419,6 +420,7 @@ function renderTech(symbol,data,info){
       <span>今開 <b style="color:var(--text2)">${dayOpen?fmt(dayOpen):'—'}</b></span>
       <span>日高 <b class="up">${dayHigh?fmt(dayHigh):'—'}</b></span>
       <span>日低 <b class="down">${dayLow?fmt(dayLow):'—'}</b></span>
+      ${info.quoteTime?`<span>報價時間 <b style="color:var(--text2)">${info.quoteTime}</b>（${escapeHtml(info.quoteSource||'')}，非延遲報價）</span>`:''}
       <span style="margin-left:auto;opacity:.5">數據來源：${info._source==='FMP'?'FMP ✓':info._source==='Yahoo'?'Yahoo ✓':info._source==='Stooq'?'Stooq ✓':info._source==='TWSE'?'TWSE ✓':info._source==='TPEx'?'TPEx ✓':'即時K線（基本面待補）'}</span>
     </div>
   </div>
