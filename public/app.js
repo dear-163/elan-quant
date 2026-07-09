@@ -1221,7 +1221,7 @@ document.getElementById('symbolInput').addEventListener('keydown',e=>{if(e.key==
 
 async function loadActiveEtfRankings() {
   try {
-    const res = await fetch('/api/active-etf-flow');
+    const res = await fetch('/api/active-etf-flow?t=' + Date.now());
     if (!res.ok) return;
     const data = await res.json().catch(() => null);
     if (!data || !data.rankings) return;
