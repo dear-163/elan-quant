@@ -1,4 +1,4 @@
-# le cap
+# le cap 🌊
 
 即時技術分析（Yahoo Finance／FMP／TWSE／TPEx）+ Gemini AI 基本面分析網路 App。前端為純靜態頁面，`/api/*` 由 Cloudflare Pages Functions 代管。
 
