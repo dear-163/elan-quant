@@ -10,7 +10,10 @@
 <body>
 
 <div class="header">
-  <div class="brand">✨ Élan Quant</div>
+  <div class="brand" style="display:flex; align-items:center; gap:8px;">
+    <img src="https://images.unsplash.com/photo-1505118380757-91f5f5632de0?auto=format&fit=crop&w=80&h=80&q=80" style="width:24px; height:24px; border-radius:50%; object-fit:cover; border: 1px solid rgba(255,255,255,0.2);" />
+    <span>✨ Élan Quant</span>
+  </div>
   <div class="search-row">
     <input type="text" id="symbolInput" placeholder="股票代號，如 AAPL、2330（台股可直接輸入數字）、NVDA" />
     <button class="btn" id="analyzeBtn" onclick="analyze()">開始分析</button>
