@@ -13,7 +13,7 @@
 // AAPL filing inspected while building this had exactly 'M' and 'F' transactions from routine RSU
 // vesting — counting those as "insider bought/sold" would have been a fabricated signal.
 const SYMBOL_RE = /^[A-Za-z0-9.\-]{1,15}$/;
-const SEC_HEADERS = { 'User-Agent': 'ElanQuant/1.0 (elan-quant.pages.dev, contact via GitHub)', 'Accept': 'application/json' };
+const SEC_HEADERS = { 'User-Agent': 'LeCap/1.0 (le-cap.pages.dev, contact via GitHub)', 'Accept': 'application/json' };
 const MAX_FILINGS = 20; // recent Form 4 filings to inspect per request — enough for a meaningful recent signal without excessive fetches
 
 function json(obj, status = 200, extraHeaders = {}) {

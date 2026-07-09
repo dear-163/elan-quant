@@ -1,5 +1,5 @@
 {
-  "name": "elan-quant",
+  "name": "le-cap",
   "private": true,
   "scripts": {
     "dev": "wrangler pages dev public",
