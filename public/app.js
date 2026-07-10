@@ -811,20 +811,23 @@ function renderChip(data, etfData, lc){
               const wtColor = f.changeWeight > 0 ? 'var(--red)' : (f.changeWeight < 0 ? 'var(--green)' : 'var(--text3)');
               const amtSign = f.changeAmount > 0 ? '+' : '';
               const wtSign = f.changeWeight > 0 ? '+' : '';
-              const changeSharesTxt = f.changeShares != null ? `${sign}${f.changeShares.toLocaleString()} 股` : '無比較資料';
+              const changeSharesTxt = f.changeShares != null ? `${sign}${f.changeShares.toLocaleString()} 股` : (f.changeWeight != null ? '無股數資料' : '無比較資料');
               const changeWeightTxt = f.changeWeight != null ? `${wtSign}${f.changeWeight.toFixed(2)}%` : '—';
+              const changeAmtTxt = f.changeAmount != null ? `${amtSign}${fmtAmt(f.changeAmount)}${f.amountEstimated ? '（以權重推算）' : ''}` : '';
+              const totalAmtTxt = f.totalAmount != null ? `${fmtAmt(f.totalAmount)}${f.totalAmountEstimated ? '（以權重推算）' : ''}` : '';
+              const sharesTxt = f.shares != null ? `${f.shares.toLocaleString()} 股` : '（無股數資料）';
               return `
               <tr style="border-bottom:1px solid var(--border);">
                 <td style="padding:8px 10px; font-weight:600; color:var(--blue); cursor:pointer;" onclick="quickLoad('${escapeHtml(f.stockCode)}.TW')">${escapeHtml(f.stockName)} (${escapeHtml(f.stockCode)})</td>
                 <td style="padding:8px 10px;"><span class="badge ${badgeClass}">${escapeHtml(f.action)}</span></td>
                 <td style="padding:8px 10px; text-align:right; font-weight:700; color:${colorStyle};">
                   <div>${changeSharesTxt}</div>
-                  <div style="font-size:10px; font-weight:normal; opacity:.7; color:${amtColor};">${amtSign}${fmtAmt(f.changeAmount)}</div>
+                  <div style="font-size:10px; font-weight:normal; opacity:.7; color:${amtColor};">${changeAmtTxt}</div>
                 </td>
                 <td style="padding:8px 10px; text-align:right; color:${wtColor};">${changeWeightTxt}</td>
                 <td style="padding:8px 10px; text-align:right; color:var(--text2);">
-                  <div>${f.shares.toLocaleString()} 股</div>
-                  <div style="font-size:10px; opacity:.7;">${fmtAmt(f.totalAmount)}</div>
+                  <div>${sharesTxt}</div>
+                  <div style="font-size:10px; opacity:.7;">${totalAmtTxt}</div>
                 </td>
                 <td style="padding:8px 10px; text-align:right; color:var(--text2);">${f.weight.toFixed(2)}%</td>
               </tr>
@@ -851,8 +854,6 @@ function renderChip(data, etfData, lc){
           </thead>
           <tbody>
             ${etfData.flow.map(f => {
-              const changeAmount = f.changeShares != null ? f.changeShares * lc : null;
-              const totalAmount = f.shares * lc;
               let badgeClass = 'badge-amber';
               let colorStyle = 'var(--text3)';
               let sign = '';
@@ -865,24 +866,27 @@ function renderChip(data, etfData, lc){
                 colorStyle = 'var(--green)';
                 sign = '';
               }
-              const amtColor = changeAmount > 0 ? 'var(--red)' : (changeAmount < 0 ? 'var(--green)' : 'var(--text3)');
+              const amtColor = f.changeAmount > 0 ? 'var(--red)' : (f.changeAmount < 0 ? 'var(--green)' : 'var(--text3)');
               const wtColor = f.changeWeight > 0 ? 'var(--red)' : (f.changeWeight < 0 ? 'var(--green)' : 'var(--text3)');
-              const amtSign = changeAmount > 0 ? '+' : '';
+              const amtSign = f.changeAmount > 0 ? '+' : '';
               const wtSign = f.changeWeight > 0 ? '+' : '';
-              const changeSharesTxt = f.changeShares != null ? `${sign}${f.changeShares.toLocaleString()} 股` : '無比較資料';
+              const changeSharesTxt = f.changeShares != null ? `${sign}${f.changeShares.toLocaleString()} 股` : (f.changeWeight != null ? '無股數資料' : '無比較資料');
               const changeWeightTxt = f.changeWeight != null ? `${wtSign}${f.changeWeight.toFixed(2)}%` : '—';
+              const changeAmtTxt = f.changeAmount != null ? `${amtSign}${fmtAmt(f.changeAmount)}${f.amountEstimated ? '（以權重推算）' : ''}` : '';
+              const totalAmtTxt = f.totalAmount != null ? `${fmtAmt(f.totalAmount)}${f.totalAmountEstimated ? '（以權重推算）' : ''}` : '';
+              const sharesTxt = f.shares != null ? `${f.shares.toLocaleString()} 股` : '（無股數資料）';
               return `
               <tr style="border-bottom:1px solid var(--border);">
                 <td style="padding:8px 10px; font-weight:600; color:var(--text);">${escapeHtml(f.etfName)} (${escapeHtml(f.etfCode)})</td>
                 <td style="padding:8px 10px;"><span class="badge ${badgeClass}">${escapeHtml(f.action)}</span></td>
                 <td style="padding:8px 10px; text-align:right; font-weight:700; color:${colorStyle};">
                   <div>${changeSharesTxt}</div>
-                  <div style="font-size:10px; font-weight:normal; opacity:.7; color:${amtColor};">${amtSign}${fmtAmt(changeAmount)}</div>
+                  <div style="font-size:10px; font-weight:normal; opacity:.7; color:${amtColor};">${changeAmtTxt}</div>
                 </td>
                 <td style="padding:8px 10px; text-align:right; color:${wtColor};">${changeWeightTxt}</td>
                 <td style="padding:8px 10px; text-align:right; color:var(--text2);">
-                  <div>${f.shares.toLocaleString()} 股</div>
-                  <div style="font-size:10px; opacity:.7;">${fmtAmt(totalAmount)}</div>
+                  <div>${sharesTxt}</div>
+                  <div style="font-size:10px; opacity:.7;">${totalAmtTxt}</div>
                 </td>
                 <td style="padding:8px 10px; text-align:right; color:var(--text2);">${f.weight.toFixed(2)}%</td>
               </tr>
@@ -1243,14 +1247,14 @@ async function loadActiveEtfRankings() {
     const buysHtml = buys.map(b => `
       <div style="display:flex; justify-content:space-between; align-items:center; padding: 4px 0; border-bottom: 1px dashed var(--border);">
         <span style="font-weight:600; cursor:pointer; color:var(--text);" onclick="quickLoad('${escapeHtml(b.stock_code)}')">${escapeHtml(b.stock_code)} <span style="font-size:11px;font-weight:normal;color:var(--text3);margin-left:4px;">${escapeHtml(b.stock_name || '')}</span></span>
-        <span class="up" style="font-weight:700;">+${fmtAmt(b.changeAmount)}</span>
+        <span class="up" style="font-weight:700;">${b.estimated ? '≈' : ''}+${fmtAmt(b.changeAmount)}</span>
       </div>
     `).join('') || '<div style="color:var(--text3); text-align:center;">今日尚無買超記錄</div>';
 
     const sellsHtml = sells.map(s => `
       <div style="display:flex; justify-content:space-between; align-items:center; padding: 4px 0; border-bottom: 1px dashed var(--border);">
         <span style="font-weight:600; cursor:pointer; color:var(--text);" onclick="quickLoad('${escapeHtml(s.stock_code)}')">${escapeHtml(s.stock_code)} <span style="font-size:11px;font-weight:normal;color:var(--text3);margin-left:4px;">${escapeHtml(s.stock_name || '')}</span></span>
-        <span class="down" style="font-weight:700;">${fmtAmt(s.changeAmount)}</span>
+        <span class="down" style="font-weight:700;">${s.estimated ? '≈' : ''}${fmtAmt(s.changeAmount)}</span>
       </div>
     `).join('') || '<div style="color:var(--text3); text-align:center;">今日尚無賣超記錄</div>';
 

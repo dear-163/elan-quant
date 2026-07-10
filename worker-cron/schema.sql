@@ -37,14 +37,26 @@ CREATE TABLE IF NOT EXISTS holder_weekly_snapshot (
 CREATE INDEX IF NOT EXISTS idx_holder_weekly_snapshot_code_date ON holder_weekly_snapshot(code, date);
 
 -- 主動式 ETF 每日持股明細表（Option A & B 籌碼追蹤）
+-- shares 可為 NULL：部分發行公司（如國泰投信）官網 API 只揭露持股權重百分比，不揭露實際股數，
+-- 這種來源就誠實存 NULL，不要用權重反推一個假的股數。讀取端（active-etf-flow.js）在 shares
+-- 缺漏時改用 weight 的變化來判斷加碼/減碼方向，金額欄位則明確標示為「以權重推算」。
 CREATE TABLE IF NOT EXISTS active_etf_holdings (
   etf_code TEXT NOT NULL,
   etf_name TEXT NOT NULL,
   stock_code TEXT NOT NULL,       -- 例如 2330
   date TEXT NOT NULL,             -- 資料日期（YYYY-MM-DD 或 YYYYMMDD，統一使用 YYYY-MM-DD 格式）
-  shares INTEGER NOT NULL,        -- 持股股數
+  shares INTEGER,                 -- 持股股數（來源不揭露股數時為 NULL）
   weight REAL NOT NULL,           -- 持股比重（百分比，如 5.34 表示 5.34%）
   PRIMARY KEY (etf_code, stock_code, date)
 );
 CREATE INDEX IF NOT EXISTS idx_active_etf_holdings_stock_date ON active_etf_holdings(stock_code, date);
 CREATE INDEX IF NOT EXISTS idx_active_etf_holdings_etf_date ON active_etf_holdings(etf_code, date);
+
+-- 只給「只揭露權重、不揭露股數」的發行公司使用（目前僅國泰投信）：存每日基金的股票資產總市值
+-- （來自其 GetETFDetailBalList 端點的「股票」分類金額），供讀取端把 weight 變化換算成估計金額。
+CREATE TABLE IF NOT EXISTS etf_portfolio_value (
+  etf_code TEXT NOT NULL,
+  date TEXT NOT NULL,
+  stock_value REAL NOT NULL,      -- 基金持有股票部位的總市值（新台幣）
+  PRIMARY KEY (etf_code, date)
+);

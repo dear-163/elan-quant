@@ -38,6 +38,7 @@ const etfs = [
   { code: '00983A', name: '中信ARK創新主動式ETF', source: 'ctbc', fundCode: 'E0034' },
   { code: '00995A', name: '中信台灣卓越主動式ETF', source: 'ctbc', fundCode: 'E0036' },
   { code: '00994A', name: '第一金台股優主動式ETF', source: 'first', fundCode: '182' },
+  { code: '00400A', name: '國泰台股動能高息主動式ETF', source: 'cathay', fundCode: 'EA' },
 ];
 
 // ezmoney.com.tw（統一投信官網）對第一次沒帶反爬蟲 cookie 的請求，永遠回傳 302 重新導向回同一個
@@ -278,6 +279,50 @@ async function fetchFirstHoldings(fundId) {
     .map(r => ({ stockCode: r.A, weight: parseFloat(r.C), shares: parseFloat(String(r.D).replace(/,/g, '')) }));
 }
 
+// 國泰投信（cwapi.cathaysite.com.tw）擋在 Akamai 後面，但只要有像瀏覽器的 User-Agent 就會放行，
+// 不需要 cookie/token。這個 API 只揭露「持股權重%」，不像其他發行公司會一併給股數——回傳的
+// holdings 陣列因此 shares 一律是 null，讀取端（active-etf-flow.js）要用 weight 變化判斷
+// 加碼/減碼方向。GetIndexStockWeights（持股權重）實測不管傳什麼 SearchDate（含未來日期）都會
+// 回傳同一份「目前最新」快照，不能拿它判斷日期是否已結算；GetETFDetailBalList（資產成分/總
+// 市值）則會誠實地對還沒結算的日期回傳「查無資料」，所以先用它從今天往前找「最新已結算日」，
+// 兩個端點都改用這個日期查，同時把總市值掛在回傳陣列的 .stockValue 屬性上，供讀取端把 weight
+// 變化換算成估計金額。
+async function fetchCathayHoldings(fundCode) {
+  const headers = { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' };
+
+  let stockValue = null;
+  let settledDate = null;
+  let lastError = null;
+  for (let back = 0; back < 5 && !settledDate; back++) {
+    const d = new Date(Date.now() + 8 * 3600 * 1000 - back * 86400000);
+    const searchDate = `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}-${String(d.getUTCDate()).padStart(2, '0')}`;
+    try {
+      const balRes = await fetch(`https://cwapi.cathaysite.com.tw/api/ETF/GetETFDetailBalList?FundCode=${fundCode}&SearchDate=${searchDate}&status=1`, { headers });
+      if (!balRes.ok) { lastError = new Error(`國泰投信資產成分 API HTTP ${balRes.status}`); continue; }
+      const balJson = await balRes.json();
+      if (!balJson.success) { lastError = new Error(`國泰投信資產成分 API 無資料（${searchDate}）：${balJson.returnMessage || balJson.returnCode}`); continue; }
+      const stockItem = (balJson?.result || []).find(x => x.item === '股票');
+      const parsed = stockItem ? parseFloat(String(stockItem.amount).replace(/[^\d.-]/g, '')) : null;
+      settledDate = searchDate;
+      if (parsed != null && isFinite(parsed)) stockValue = parsed;
+    } catch (e) { lastError = e; }
+  }
+  if (!settledDate) throw (lastError || new Error('國泰投信 API 連續 5 天皆無已結算資料'));
+
+  const res = await fetch(`https://cwapi.cathaysite.com.tw/api/ETF/GetIndexStockWeights?FundCode=${fundCode}&SearchDate=${settledDate}`, { headers });
+  if (!res.ok) throw new Error(`國泰投信持股權重 API HTTP ${res.status}`);
+  const apiRes = await res.json();
+  const rows = apiRes?.result?.stockWeights;
+  if (!apiRes.success || !Array.isArray(rows) || rows.length === 0) throw new Error(`國泰投信持股權重 API 無資料（${settledDate}）：${apiRes.returnMessage || apiRes.returnCode}`);
+
+  const holdings = rows.map(r => ({
+    stockCode: r.stockCode, shares: null, weight: parseFloat(r.weights),
+  })).filter(h => h.stockCode && isFinite(h.weight));
+
+  if (stockValue != null) holdings.stockValue = stockValue;
+  return holdings;
+}
+
 const FETCHERS = {
   ezmoney: fetchEzmoneyHoldings,
   nomura: fetchNomuraHoldings,
@@ -288,6 +333,7 @@ const FETCHERS = {
   ab: fetchAllianceBernsteinHoldings,
   ctbc: fetchCtbcHoldings,
   first: fetchFirstHoldings,
+  cathay: fetchCathayHoldings,
 };
 
 async function main() {
@@ -300,9 +346,16 @@ async function main() {
       if (!fetcher) throw new Error(`未知的資料來源：${etf.source}`);
       const holdings = await fetcher(etf.fundCode);
 
-      for (const h of holdings) {
+      if (holdings.stockValue != null) {
         sqlCommands.push(
-          `INSERT OR REPLACE INTO active_etf_holdings (etf_code, etf_name, stock_code, date, shares, weight) VALUES ('${etf.code}', '${etf.name}', '${h.stockCode}', '${todayDate}', ${h.shares}, ${h.weight});`
+          `INSERT OR REPLACE INTO etf_portfolio_value (etf_code, date, stock_value) VALUES ('${etf.code}', '${todayDate}', ${holdings.stockValue});`
+        );
+      }
+
+      for (const h of holdings) {
+        const sharesSql = h.shares == null ? 'NULL' : h.shares;
+        sqlCommands.push(
+          `INSERT OR REPLACE INTO active_etf_holdings (etf_code, etf_name, stock_code, date, shares, weight) VALUES ('${etf.code}', '${etf.name}', '${h.stockCode}', '${todayDate}', ${sharesSql}, ${h.weight});`
         );
       }
       console.log(`Parsed ${holdings.length} constituents for ${etf.code}`);

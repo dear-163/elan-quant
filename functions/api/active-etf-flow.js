@@ -2,6 +2,37 @@ function json(obj, status = 200) {
   return new Response(JSON.stringify(obj), { status, headers: { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' } });
 }
 
+// shares 可能是 NULL（該發行公司只揭露 weight%，見 etf_portfolio_value 的註解）。這種情況下
+// 用 weight 的變化方向判斷加碼/減碼，並回傳 weightBasedAmount：用「weight變化% × 股票總
+// 市值」換算的估計金額（呼叫端沒有真實股數/價格可用時，拿它當 changeAmount 並標示 estimated）。
+function computeChangeAndAction(t, y, labels, portfolioValueMap, todayDate, yesterdayDate, etfCodeForValue) {
+  const sharesKnown = (t ? t.shares != null : true) && (y ? y.shares != null : true) && (t || y);
+  let changeShares = null, changeWeight = null, action = labels.none, weightBasedAmount = null;
+
+  if (sharesKnown) {
+    changeShares = (t ? t.shares : 0) - (y ? y.shares : 0);
+    changeWeight = (t ? t.weight : 0) - (y ? y.weight : 0);
+    action = changeShares > 0 ? labels.up : (changeShares < 0 ? labels.down : labels.flat);
+  } else if (t || y) {
+    changeWeight = (t ? t.weight : 0) - (y ? y.weight : 0);
+    action = changeWeight > 0 ? labels.up : (changeWeight < 0 ? labels.down : labels.flat);
+
+    const svToday = portfolioValueMap[etfCodeForValue]?.[todayDate];
+    const svYesterday = portfolioValueMap[etfCodeForValue]?.[yesterdayDate];
+    const valToday = t ? (svToday != null ? (t.weight / 100) * svToday : null) : 0;
+    const valYesterday = y ? (svYesterday != null ? (y.weight / 100) * svYesterday : null) : 0;
+    if (valToday != null && valYesterday != null) weightBasedAmount = valToday - valYesterday;
+  }
+
+  return { changeShares, changeWeight, action, weightBasedAmount };
+}
+
+function hasFlowSignal(f) {
+  if (f.changeShares != null) return f.changeShares !== 0 || f.shares > 0;
+  if (f.changeWeight != null) return f.changeWeight !== 0 || f.weight > 0;
+  return (f.shares > 0) || (f.weight > 0);
+}
+
 export async function onRequestGet(context) {
   const { request, env } = context;
   const url = new URL(request.url);
@@ -57,6 +88,19 @@ export async function onRequestGet(context) {
       for (const p of priceRows.results) {
         priceMap[p.code] = p.close;
       }
+    }
+
+    // 少數發行公司（目前僅國泰投信）只揭露持股權重%、不揭露股數，這種來源的 holdings 列
+    // shares 是 NULL。這張表存的是那些 ETF 每日「股票資產總市值」，用來把 weight 的變化
+    // 換算成估計金額（weight變化% × 當天股票總市值），下面所有分支算金額時都會用到。
+    const portfolioValueRows = await env.ELAN_QUANT_DB
+      .prepare('SELECT etf_code, date, stock_value FROM etf_portfolio_value WHERE date IN (?, ?)')
+      .bind(todayDate, yesterdayDate || todayDate)
+      .all();
+    const portfolioValueMap = {}; // etf_code -> { [date]: stock_value }
+    for (const r of (portfolioValueRows.results || [])) {
+      if (!portfolioValueMap[r.etf_code]) portfolioValueMap[r.etf_code] = {};
+      portfolioValueMap[r.etf_code][r.date] = r.stock_value;
     }
 
     const STOCK_NAMES = {
@@ -125,28 +169,40 @@ export async function onRequestGet(context) {
 
           if (!t) continue;
 
-          let changeShares = null;
-          let changeWeight = null;
-          let action = '無比較資料';
-
-          if (etfHasYesterday) {
-            changeShares = y ? t.shares - y.shares : t.shares;
-            changeWeight = y ? t.weight - y.weight : t.weight;
-            action = changeShares > 0 ? '加碼' : (changeShares < 0 ? '減碼' : '無變動');
-          }
+          let changeShares = null, changeWeight = null, action = '無比較資料', changeAmount = null, amountEstimated = false;
 
           const price = priceMap[code] || null;
+          if (etfHasYesterday) {
+            const r = computeChangeAndAction(t, y, { up: '加碼', down: '減碼', flat: '無變動', none: '無比較資料' }, portfolioValueMap, todayDate, yesterdayDate, etfCode);
+            changeShares = r.changeShares;
+            changeWeight = r.changeWeight;
+            action = r.action;
+            if (price != null && changeShares != null) {
+              changeAmount = changeShares * price;
+            } else if (r.weightBasedAmount != null) {
+              changeAmount = r.weightBasedAmount;
+              amountEstimated = true;
+            }
+          }
+
+          const svToday = portfolioValueMap[etfCode]?.[todayDate];
+          const totalAmount = (price != null && t.shares != null)
+            ? t.shares * price
+            : (svToday != null ? (t.weight / 100) * svToday : null);
+          const totalAmountEstimated = !(price != null && t.shares != null) && totalAmount != null;
 
           flow.push({
             stockCode: code,
             stockName: STOCK_NAMES[code] || `個股 ${code}`,
             action,
-            shares: t ? t.shares : 0,
-            weight: t ? t.weight : 0,
+            shares: t.shares,
+            weight: t.weight,
             changeShares,
             changeWeight,
-            changeAmount: (price != null && changeShares != null) ? changeShares * price : null,
-            totalAmount: price != null ? (t ? t.shares : 0) * price : null,
+            changeAmount,
+            amountEstimated: amountEstimated || undefined,
+            totalAmount,
+            totalAmountEstimated: totalAmountEstimated || undefined,
             date: todayDate,
             comparedTo: etfHasYesterday ? yesterdayDate : null
           });
@@ -158,7 +214,7 @@ export async function onRequestGet(context) {
           isEtf: true,
           etfCode,
           etfName,
-          flow: etfHasYesterday ? flow.filter(f => f.changeShares !== 0 || f.shares > 0) : flow
+          flow: etfHasYesterday ? flow.filter(hasFlowSignal) : flow
         });
       }
 
@@ -200,23 +256,26 @@ export async function onRequestGet(context) {
         const y = item.yesterday;
         const etfHasYesterday = etfsWithYesterdayData.has(item.etf_code);
 
-        let changeShares = null;
-        let changeWeight = null;
-        let action = '無比較資料';
+        let changeShares = null, changeWeight = null, action = '無比較資料', changeAmount = null, amountEstimated = false;
 
         if (etfHasYesterday) {
-          if (t && y) {
-            changeShares = t.shares - y.shares;
-            changeWeight = t.weight - y.weight;
-          } else if (t) {
-            changeShares = t.shares;
-            changeWeight = t.weight;
-          } else if (y) {
-            changeShares = -y.shares;
-            changeWeight = -y.weight;
+          const r = computeChangeAndAction(t, y, { up: '買進', down: '賣出', flat: '無變動', none: '無比較資料' }, portfolioValueMap, todayDate, yesterdayDate, item.etf_code);
+          changeShares = r.changeShares;
+          changeWeight = r.changeWeight;
+          action = r.action;
+          if (price != null && changeShares != null) {
+            changeAmount = changeShares * price;
+          } else if (r.weightBasedAmount != null) {
+            changeAmount = r.weightBasedAmount;
+            amountEstimated = true;
           }
-          action = changeShares > 0 ? '買進' : (changeShares < 0 ? '賣出' : '無變動');
         }
+
+        const svToday = portfolioValueMap[item.etf_code]?.[todayDate];
+        const totalAmount = t
+          ? ((price != null && t.shares != null) ? t.shares * price : (svToday != null ? (t.weight / 100) * svToday : null))
+          : null;
+        const totalAmountEstimated = t != null && !(price != null && t.shares != null) && totalAmount != null;
 
         flow.push({
           etfCode: item.etf_code,
@@ -226,7 +285,10 @@ export async function onRequestGet(context) {
           weight: t ? t.weight : 0,
           changeShares,
           changeWeight,
-          changeAmount: (price != null && changeShares != null) ? changeShares * price : null,
+          changeAmount,
+          amountEstimated: amountEstimated || undefined,
+          totalAmount,
+          totalAmountEstimated: totalAmountEstimated || undefined,
           date: todayDate,
           comparedTo: etfHasYesterday ? yesterdayDate : null
         });
@@ -236,7 +298,7 @@ export async function onRequestGet(context) {
         date: todayDate,
         comparedTo: yesterdayDate,
         symbol: stockCode,
-        flow: flow.filter(f => f.changeShares !== 0 || f.shares > 0)
+        flow: flow.filter(hasFlowSignal)
       });
     }
 
@@ -249,23 +311,27 @@ export async function onRequestGet(context) {
     const allRecords = await env.ELAN_QUANT_DB.prepare(allQuery).bind(...allBindings).all();
     const recordsList = allRecords.results || [];
 
-    // Group by stock_code — skip any ETF that has no yesterday-dated rows at all (e.g. just
-    // switched data source, or a one-off cron failure) so it doesn't get diffed against an
-    // effectively-empty baseline and show up as a fake full-position "buy".
-    const stockChanges = {};
+    // Group by (etf_code, stock_code) — skip any ETF that has no yesterday-dated rows at all
+    // (e.g. just switched data source, or a one-off cron failure) so it doesn't get diffed
+    // against an effectively-empty baseline and show up as a fake full-position "buy".
+    const pairMap = {};
     for (const r of recordsList) {
       if (!etfsWithYesterdayData.has(r.etf_code)) continue;
-      if (!stockChanges[r.stock_code]) {
-        stockChanges[r.stock_code] = { stock_code: r.stock_code, todayShares: 0, yesterdayShares: 0 };
-      }
-      if (r.date === todayDate) stockChanges[r.stock_code].todayShares += r.shares;
-      else stockChanges[r.stock_code].yesterdayShares += r.shares;
+      const key = r.etf_code + '|' + r.stock_code;
+      if (!pairMap[key]) pairMap[key] = { etf_code: r.etf_code, stock_code: r.stock_code, today: null, yesterday: null };
+      if (r.date === todayDate) pairMap[key].today = r; else pairMap[key].yesterday = r;
     }
 
+    // 只有「有真實股數」的持股才需要股價換算金額；只揭露 weight 的來源（如國泰）改用
+    // portfolioValueMap 換算，不需要股價。
     const missingRankingsCodes = [];
-    for (const code in stockChanges) {
-      if (priceMap[code] == null && (stockChanges[code].todayShares - stockChanges[code].yesterdayShares !== 0)) {
-        missingRankingsCodes.push(code);
+    const seenForPrice = new Set();
+    for (const key in pairMap) {
+      const { stock_code, today: t, yesterday: y } = pairMap[key];
+      const sharesKnown = t?.shares != null || y?.shares != null;
+      if (sharesKnown && priceMap[stock_code] == null && !seenForPrice.has(stock_code)) {
+        missingRankingsCodes.push(stock_code);
+        seenForPrice.add(stock_code);
       }
     }
     if (missingRankingsCodes.length > 0) {
@@ -275,21 +341,48 @@ export async function onRequestGet(context) {
       }
     }
 
+    // 同一檔股票可能同時被「有股數」跟「只有權重」的 ETF 持有，兩種金額用不同方式算完後
+    // 加總到同一個 stock_code——只要其中任何一筆是用權重推算的，整列就標示 estimated。
+    const stockAgg = {};
+    for (const key in pairMap) {
+      const { etf_code, stock_code, today: t, yesterday: y } = pairMap[key];
+      if (!t && !y) continue;
+      const sharesKnown = (t ? t.shares != null : true) && (y ? y.shares != null : true);
+      if (!stockAgg[stock_code]) stockAgg[stock_code] = { stock_code, changeAmount: 0, estimated: false, hasAny: false };
+      const agg = stockAgg[stock_code];
+
+      if (sharesKnown) {
+        const changeShares = (t ? t.shares : 0) - (y ? y.shares : 0);
+        const price = priceMap[stock_code] || null;
+        // No real price on record for this code (e.g. brand-new listing, or a TPEx holding —
+        // stock_daily_price is TWSE-only) — skip rather than rank it using a guessed price.
+        if (price != null && changeShares !== 0) {
+          agg.changeAmount += changeShares * price;
+          agg.hasAny = true;
+        }
+      } else {
+        const svToday = portfolioValueMap[etf_code]?.[todayDate];
+        const svYesterday = portfolioValueMap[etf_code]?.[yesterdayDate];
+        const valToday = t ? (svToday != null ? (t.weight / 100) * svToday : null) : 0;
+        const valYesterday = y ? (svYesterday != null ? (y.weight / 100) * svYesterday : null) : 0;
+        if (valToday != null && valYesterday != null && (valToday - valYesterday) !== 0) {
+          agg.changeAmount += (valToday - valYesterday);
+          agg.estimated = true;
+          agg.hasAny = true;
+        }
+      }
+    }
+
     const changes = [];
-    for (const code in stockChanges) {
-      const item = stockChanges[code];
-      const changeShares = item.todayShares - item.yesterdayShares;
-      const price = priceMap[code] || null;
-      // No real price on record for this code (e.g. brand-new listing, or a TPEx holding —
-      // stock_daily_price is TWSE-only) — skip rather than rank it using a guessed price.
-      if (price == null || changeShares === 0) continue;
-      const changeAmount = changeShares * price;
+    for (const code in stockAgg) {
+      const agg = stockAgg[code];
+      if (!agg.hasAny || agg.changeAmount === 0) continue;
       changes.push({
         stock_code: code,
         stock_name: STOCK_NAMES[code] || ('個股 ' + code),
-        changeShares,
-        changeAmount,
-        action: changeAmount > 0 ? '買超' : '賣超'
+        changeAmount: agg.changeAmount,
+        action: agg.changeAmount > 0 ? '買超' : '賣超',
+        estimated: agg.estimated || undefined
       });
     }
 
