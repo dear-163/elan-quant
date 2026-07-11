@@ -1308,3 +1308,24 @@ async function loadMarketFlowRankings() {
   }
 }
 loadMarketFlowRankings();
+
+// 台股大盤融資維持率。低於 105% 是歷史上少見的極端低檔（一般行情約 150-200%），才會標示強烈買進提示。
+async function loadMarginRatio() {
+  try {
+    const res = await fetch('/api/margin-ratio?t=' + Date.now());
+    if (!res.ok) return;
+    const data = await res.json().catch(() => null);
+    if (!data || data.error || data.ratio == null) return;
+
+    document.getElementById('marginRatioValue').textContent = data.ratio.toFixed(2) + '%';
+    document.getElementById('marginRatioDate').textContent = data.date ? `更新日期：${data.date}` : '';
+    const badgeEl = document.getElementById('marginRatioBadge');
+    badgeEl.innerHTML = data.ratio < 105
+      ? `<span class="badge badge-red" style="font-size:12px;">🔥 強烈買進</span>`
+      : '';
+    document.getElementById('marginRatioCard').style.display = 'block';
+  } catch (e) {
+    console.error('Failed to load margin ratio:', e);
+  }
+}
+loadMarginRatio();
