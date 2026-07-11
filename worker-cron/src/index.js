@@ -512,6 +512,28 @@ async function fetchCathayHoldings(fundCode) {
   return holdings;
 }
 
+// 群益投信（capitalfund.com.tw）：乾淨的公開 JSON API，不用 cookie/登入，也不受頁面上看到的
+// Incapsula 資源保護（那是網站其他部分用的，這支 API 本身可直接打）。POST body 欄位必須是
+// {fundId, date:null}（fundId 用的是內部代碼如 "399"，不是公開股票代號 "00982A"——這點卡了
+// 很久，是從頁面編譯後的 JS bundle 反查 this.condition={fundId,date} 的真實欄位名稱才找到的）。
+// 回應除了股票明細，也包含美股持股（stocNo 帶" US"字尾，如"AMD US"）——00997A整檔都是美股，
+// 照舊，非純數字代號的部分金額會在讀取端顯示「暫無資料」，不特別處理。
+async function fetchCapitalHoldings(fundId) {
+  const res = await fetch('https://www.capitalfund.com.tw/CFWeb/api/etf/buyback', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' },
+    body: JSON.stringify({ fundId, date: null }),
+  });
+  if (!res.ok) throw new Error(`群益投信 API HTTP ${res.status}`);
+  const apiRes = await res.json();
+  const stocks = apiRes?.data?.stocks;
+  if (apiRes.code !== 200 || !Array.isArray(stocks)) throw new Error(`群益投信 API 回應格式跟預期不符：${JSON.stringify(apiRes).slice(0, 200)}`);
+  return stocks.map(s => ({
+    stockCode: s.stocNo, stockName: (s.stocName || '').trim(),
+    shares: s.share != null ? Math.round(s.share) : null, weight: s.weight,
+  })).filter(h => h.stockCode && isFinite(h.weight));
+}
+
 async function fetchAndStoreActiveEtfHoldings(db, todayDash) {
   const etfs = [
     { code: '00981A', name: '統一台股增長主動式ETF', source: 'ezmoney', fundCode: '49YTW' },
@@ -535,13 +557,16 @@ async function fetchAndStoreActiveEtfHoldings(db, todayDash) {
     { code: '00995A', name: '中信台灣卓越主動式ETF', source: 'ctbc', fundCode: 'E0036' },
     { code: '00994A', name: '第一金台股優主動式ETF', source: 'first', fundCode: '182' },
     { code: '00400A', name: '國泰台股動能高息主動式ETF', source: 'cathay', fundCode: 'EA' },
+    { code: '00982A', name: '群益台灣精選強棒主動式ETF', source: 'capital', fundCode: '399' },
+    { code: '00992A', name: '群益台灣科技創新主動式ETF', source: 'capital', fundCode: '500' },
+    { code: '00997A', name: '群益美國增長主動式ETF', source: 'capital', fundCode: '502' },
   ];
 
   const fetchers = {
     ezmoney: fetchEzmoneyHoldings, nomura: fetchNomuraHoldings, kgifund: fetchKgifundHoldings,
     fubon: fetchFubonHoldings, allianz: fetchAllianzHoldings, taishin: fetchTaishinHoldings,
     ab: fetchAllianceBernsteinHoldings, ctbc: fetchCtbcHoldings, first: fetchFirstHoldings,
-    cathay: fetchCathayHoldings,
+    cathay: fetchCathayHoldings, capital: fetchCapitalHoldings,
   };
 
   for (const etf of etfs) {
