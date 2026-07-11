@@ -71,7 +71,7 @@ async function analyze(){
 
   const needsKey='<div class="info-box">⚠️ 尚未設定 Gemini API Key，無法產生 AI 分析。請點上方「🔑 使用自己的 API Key」設定你自己的 Gemini Key（<a href="https://aistudio.google.com/app/apikey" target="_blank">免費申請</a>）。</div>';
   const waiting='<div class="fund-loading"><div class="spinner"></div><span>Gemini AI 正在生成分析報告⋯</span></div>';
-  ['fundContent','riskContent','conclusionContent'].forEach(id=>{
+  ['fundContent','riskContent','conclusionContent','techAIBox'].forEach(id=>{
     document.getElementById(id).innerHTML=apiKey?waiting:needsKey;
   });
   document.getElementById('summaryContent').innerHTML=apiKey?waiting:needsKey;
@@ -87,7 +87,7 @@ async function analyze(){
     if(!data||data.length<minBars) throw new Error('數據不足（台股請加 .TW，例如 2330.TW；若已選週線，可嘗試拉長時間區間或改回日線）');
 
     document.getElementById('loadingText').textContent='正在計算技術指標⋯';
-    renderTech(sym,data,info);
+    const techAIInput=renderTech(sym,data,info);
 
     document.getElementById('loadingBox').classList.add('hidden');
     document.getElementById('tabBar').classList.remove('hidden');
@@ -101,6 +101,7 @@ async function analyze(){
     const techSummary=buildTechSummary(sym,data,info);
     const companyName=info.longName||info.shortName||sym;
     if(apiKey) runGeminiAnalysis(sym,companyName,techSummary,myGen);
+    if(apiKey) runTechAIStrategy(sym,companyName,techAIInput,myGen);
 
     let chipData=null,sentimentData=null;
     // Chip and sentiment are independent data sources — fetch them concurrently instead of
@@ -359,6 +360,29 @@ function buildSRBox(lc,lBB,r1,r2,s1,s2,pivot,pivR1,pivR2,pivS1,pivS2,h52,l52,chg
 </div>`;
 }
 
+// 均線扣抵方向：跟3個交易日前比較，判斷是「上彎」還是「下彎」——現價站上均線不代表均線本身向上，
+// 這是 AI 深度技術判讀 prompt 的「均線與扣抵陷阱」規則需要的輸入。
+function maSlopeLabel(arr,lookback=3){
+  if(!arr||arr.length<lookback+1) return '資料不足';
+  const cur=arr[arr.length-1],prev=arr[arr.length-1-lookback];
+  if(cur==null||prev==null) return '資料不足';
+  const pct=prev!==0?(cur-prev)/prev*100:0;
+  if(Math.abs(pct)<0.05) return '走平';
+  return cur>prev?'上彎':'下彎';
+}
+// 布林通道開口方向：跟5個交易日前的通道寬度比較，判斷「發散」還是「收斂」——
+// AI prompt 判斷「飆股貼上軌」vs「多頭力竭」需要知道通道是張開還是收窄。
+function bbTrendLabel(bbArr,lookback=5){
+  if(!bbArr||bbArr.length<lookback+1) return '資料不足';
+  const cur=bbArr[bbArr.length-1],prev=bbArr[bbArr.length-1-lookback];
+  if(!cur||!prev||!cur.mid||!prev.mid) return '資料不足';
+  const curWidth=(cur.upper-cur.lower)/cur.mid,prevWidth=(prev.upper-prev.lower)/prev.mid;
+  if(!prevWidth) return '資料不足';
+  const diffPct=(curWidth-prevWidth)/prevWidth*100;
+  if(Math.abs(diffPct)<3) return '持平';
+  return curWidth>prevWidth?'向上開口發散':'收斂盤整';
+}
+
 function renderTech(symbol,data,info){
   const c=data.map(d=>d.close);
   const ma10=sma(c,10),ma60=sma(c,60);
@@ -514,6 +538,34 @@ function renderTech(symbol,data,info){
     drawRSIChart(labels,rsi);
     drawMACDChart(labels,macdLine,sig2,hist);
   },60);
+
+  // 給「AI 深度技術判讀」用的結構化輸入——除了現有的指標數值，還額外算了均線扣抵方向、
+  // 布林開口方向、量能狀態這幾個 prompt 的過濾規則需要、但畫面上沒有直接顯示的判斷依據。
+  const maAlignment=(lMA5!=null&&lMA20!=null&&lMA60!=null)
+    ?(lMA5>lMA20&&lMA20>lMA60?'多頭排列（MA5>MA20>MA60）':lMA5<lMA20&&lMA20<lMA60?'空頭排列（MA5<MA20<MA60）':'糾結盤整')
+    :'資料不足';
+  const bbPosition=(lc==null||!lBB)?'資料不足'
+    :lc>=lBB.upper?'貼著上軌走（強勢，非必為超買）'
+    :lc<=lBB.lower?'貼著下軌走'
+    :lc>lBB.mid?'中軌與上軌之間':'中軌與下軌之間';
+  const volRatio=(dayVol&&avgVol)?dayVol/avgVol:null;
+  const volState=volRatio==null?'資料不足':volRatio<0.8?'量縮':volRatio>1.3?'量增':'量能正常';
+  const kdSignal=sig.kd==='OVERBOUGHT'?'高檔鈍化/超買':sig.kd==='OVERSOLD'?'低檔鈍化/超賣':sig.kd==='BUY'?'K>D 黃金交叉偏多':'K<D 死亡交叉偏空';
+
+  return {
+    lc:fmt(lc),
+    ma5:fmt(lMA5),ma20:fmt(lMA20),ma60:fmt(lMA60),maAlignment,
+    ma5Slope:maSlopeLabel(ma5),ma20Slope:maSlopeLabel(ma20),
+    rsi:fmt(lRSI,1),
+    k:fmt(lK,1),d:fmt(lD,1),kdSignal,
+    macd:fmt(lMACD,4),macdSignal:fmt(lSig,4),macdHist:fmt(lHist,4),
+    bbUpper:fmt(lBB?.upper),bbMid:fmt(lBB?.mid),bbLower:fmt(lBB?.lower),
+    bbTrend:bbTrendLabel(bb),bbPosition,
+    vol:fmtVol(dayVol),avgVol:fmtVol(avgVol),volState,
+    pivot:fmt(pivot),pivR1:fmt(pivR1),pivR2:fmt(pivR2),pivS1:fmt(pivS1),pivS2:fmt(pivS2),
+    r1:fmt(r1),r2:fmt(r2),s1:fmt(s1),s2:fmt(s2),
+    h52:typeof h52==='number'?fmt(h52):(h52||'N/A'),l52:typeof l52==='number'?fmt(l52):(l52||'N/A'),
+  };
 }
 
 function drawPriceChart(labels,c,ma5,ma20,ma60,bb){
@@ -728,6 +780,232 @@ async function streamGemini(payload,targetId,cardTitle,append,retryCount=0,gen=n
     contentEl.classList.remove('streaming');
     contentEl.innerHTML=`<div class="error-box">⚠ AI 分析失敗：${e.message}</div>`;
   }
+}
+
+// ---- AI 深度技術判讀（合理買入價與風控策略）----
+// 使用者提供的完整交易員角色prompt。跟其他AI區塊（PROMPT_SECTIONS）不同，這裡要的是嚴格結構化
+// JSON輸出（合理買入價/停損/停利），不是HTML文字，所以用responseSchema強制Gemini回傳合法JSON，
+// 而不是像streamGemini那樣邊收邊顯示原始文字。
+function buildTechAIPrompt(symbol,companyName,t){
+  return `## 角色與定位
+你是一位資深的台股（TWSE/TPEx）短線造市商與量化交易員。你的任務是讀取以下技術指標、關鍵價位與現價，進行多空動能的深度審查。
+
+你必須看穿數值背後的「市場陷阱」，計算出符合風險報酬比的合理買入價，並輸出兼具實戰價值的結構化交易策略。
+
+---
+
+## 交易眉角與過濾邏輯 (Trading Nuances & Filters)
+
+在評估數據時，你必須嚴格執行以下「實戰眉角」的過濾，不得僅依據單一指標盲目輸出訊號：
+
+### 1. 均線與扣抵陷阱 (MA & Tracking Snare)
+*   眉角：股價站上均線不等於均線會上揚。如果扣抵值在高檔，均線依然會下彎形成下壓壓力。
+*   過濾邏輯：若 MA5/MA20 雖然被現價站上，但若處於「下彎」狀態，一律視為「反彈遇阻」，而非「多頭確立」。
+
+### 2. KD 鈍化與 RSI 盲區 (Indicator Passivation)
+*   眉角：強勢股在極端行情下，KD 常會在 80 以上出現「高檔鈍化」，此時盲目放空會被軋空；同理，主跌段 KD 在 20 以下低檔鈍化也不該盲目猜底。
+*   過濾邏輯：若 KD 訊號呈現「賣出（高檔死叉）」，但此時均線排列為強勢「多頭」、且布林通道「向上開口發散」，此死叉高機率為短線洗盤，策略應修正為「順勢拉回找買點」。
+
+### 3. 布林通道的邊界效應 (Bollinger Band Extremes)
+*   眉角：股價貼著布林上軌走叫「飆股」，不是超買！只有在「量縮」且現價「跌回上軌之內」時，才是多頭力竭。
+
+---
+
+## 合理買入價與風控計算邏輯 (Fair Price & Risk/Reward Calculation)
+
+當策略評估為「可佈局（偏多/跌深反彈）」時，你必須依據下方數據，依循以下邏輯推算合理買入價：
+
+1.  多頭趨勢（趨勢指標=多頭 / 布林=通道中軌或上軌）：
+    *   合理買入價定位：不盲目追高，合理買入價應落在「現價拉回至關鍵支撐」的交集區。
+    *   計算參考：優先考慮 MA5 與 樞紐 S1 之間的重疊區間。若現價離 MA5 過遠（乖離過大），必須警示「溢價過高，應等待拉回至 MA5 數值附近再行介入」。
+2.  逆勢橫盤（布林=通道下軌 / KD/RSI=超賣）：
+    *   合理買入價定位：尋找左側築底支撐。
+    *   計算參考：合理買入價應設定在 樞紐 S1 至 樞紐 S2 之間，或接近 布林下軌 處，此時買入的防守成本最低。
+3.  風控期望值過濾（硬性限制）：
+    *   合理買入價必須滿足：(預期獲利目標 − 合理買入價) / (合理買入價 − 建議停損價) ≥ 2（風險報酬比至少 1:2）。若現價進場不符合此比例，必須在合理買入價中進行「壓低修正」。
+
+---
+
+## 本次分析標的與即時數據
+
+股票：${companyName}（${symbol}）
+現價：${t.lc}
+
+【均線】
+MA5=${t.ma5} MA20=${t.ma20} MA60=${t.ma60}
+均線排列：${t.maAlignment}
+MA5 近3日扣抵方向：${t.ma5Slope}｜MA20 近3日扣抵方向：${t.ma20Slope}
+
+【動能指標】
+RSI(14)=${t.rsi}
+K=${t.k} D=${t.d}，KD訊號：${t.kdSignal}
+MACD=${t.macd}，Signal=${t.macdSignal}，能量柱=${t.macdHist}
+
+【布林通道(20,2)】
+上軌=${t.bbUpper} 中軌=${t.bbMid} 下軌=${t.bbLower}
+通道開口：${t.bbTrend}
+現價位置：${t.bbPosition}
+
+【成交量】
+今日量=${t.vol}，10日均量=${t.avgVol}，量能狀態：${t.volState}
+
+【關鍵價位】
+樞紐點=${t.pivot}
+樞紐 R1=${t.pivR1} R2=${t.pivR2}
+樞紐 S1=${t.pivS1} S2=${t.pivS2}
+20日高低=${t.r1}/${t.s1}，60日高低=${t.r2}/${t.s2}
+52週高低=${t.h52}/${t.l52}
+
+---
+
+請嚴格按照指定的 JSON Schema 輸出，不要包含任何 markdown 或程式碼區塊標記、也不要加任何 JSON 以外的說明文字。所有價位數字使用現價相同的小數位數。`;
+}
+
+const TECH_AI_SCHEMA={
+  type:'OBJECT',
+  properties:{
+    overall_signal:{type:'STRING',enum:['強勢多頭','偏多反彈','盤整中性','弱勢空頭','跌深反彈']},
+    matched_strategy:{type:'STRING'},
+    technical_nuance_warning:{type:'STRING'},
+    fair_entry_price:{
+      type:'OBJECT',
+      properties:{
+        recommended_price:{type:'NUMBER'},
+        price_range:{type:'STRING'},
+        rationale:{type:'STRING'},
+      },
+      required:['recommended_price','price_range','rationale'],
+    },
+    action_plan:{
+      type:'OBJECT',
+      properties:{
+        stop_loss:{type:'STRING'},
+        take_profit:{type:'STRING'},
+      },
+      required:['stop_loss','take_profit'],
+    },
+  },
+  required:['overall_signal','matched_strategy','technical_nuance_warning','fair_entry_price','action_plan'],
+};
+
+// 跟streamGemini走同一套429/503重試與額度偵測邏輯，但streamGemini是綁定SSE串流+特定DOM結構寫死的，
+// 硬要共用會讓兩邊都變難讀，這裡另外寫一份非串流版本（等JSON全部回來才parse，不能一邊收一邊顯示半個JSON）。
+async function callGeminiJSON(prompt,model,schema,gen,retryCount=0){
+  if(gen!=null&&gen!==analyzeGeneration) return null;
+  const el=document.getElementById('techAIBox');
+  if(retryCount===0){
+    el.innerHTML='<div class="fund-loading"><div class="spinner"></div><span>Gemini AI 正在計算合理買入價與風控策略⋯</span></div>';
+  }
+
+  if(retryCount===0&&quotaExhaustedModels.has(model)){
+    throw new Error(quotaExhaustedModels.get(model));
+  }
+
+  const res=await fetch(
+    `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`,
+    {
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({
+        contents:[{role:'user',parts:[{text:prompt}]}],
+        generationConfig:{
+          temperature:0.4,
+          maxOutputTokens:2048,
+          responseMimeType:'application/json',
+          responseSchema:schema,
+          thinkingConfig:{thinkingLevel:'low'},
+        },
+        safetySettings:[
+          {category:'HARM_CATEGORY_HARASSMENT',threshold:'BLOCK_NONE'},
+          {category:'HARM_CATEGORY_HATE_SPEECH',threshold:'BLOCK_NONE'},
+          {category:'HARM_CATEGORY_SEXUALLY_EXPLICIT',threshold:'BLOCK_NONE'},
+          {category:'HARM_CATEGORY_DANGEROUS_CONTENT',threshold:'BLOCK_NONE'},
+        ],
+      }),
+    }
+  );
+
+  if(!res.ok){
+    const errBody=await res.json().catch(()=>({}));
+    const errMsg=errBody?.error?.message||'';
+    if(res.status===429||res.status===503){
+      const limitMatch=errMsg.match(/limit:\s*(\d+)/i);
+      const limitNum=limitMatch?parseInt(limitMatch[1],10):null;
+      if(limitNum===0){
+        throw new Error('此 Gemini API Key 的免費額度為 0（limit: 0）。可能原因：① 此 Key 所屬 Google Cloud 專案尚未啟用 Generative Language API 的免費方案 ② 已超過免費帳號上限。請至 https://aistudio.google.com/app/apikey 確認 Key 狀態，或改用付費 API Key。');
+      }
+      if(retryCount<2){
+        const waitSec=15*(retryCount+1);
+        el.innerHTML=`<div style="color:var(--amber);font-size:13px;padding:8px 0">⏳ AI 服務短暫忙碌，等待 ${waitSec} 秒後重試（第 ${retryCount+1}/2 次）⋯</div>`;
+        await sleep(waitSec*1000);
+        if(gen!=null&&gen!==analyzeGeneration) return null;
+        return callGeminiJSON(prompt,model,schema,gen,retryCount+1);
+      }
+      if(limitNum&&/free_tier_requests/i.test(errMsg)){
+        const altSuggestion=model==='gemini-3.1-flash-lite'?'3.5 Flash 或 3.5 Pro':'3.1 Flash-Lite';
+        const msg=`此模型今日免費額度（每日 ${limitNum} 次）可能已用完，請明天再試，或在上方切換其他 AI 模型（例如 ${altSuggestion}）。`;
+        quotaExhaustedModels.set(model,msg);
+        throw new Error(msg);
+      }
+      throw new Error('AI 服務持續忙碌，請等待1-2分鐘後重新分析。');
+    }
+    throw new Error(errMsg||`AI 分析失敗 (${res.status})`);
+  }
+
+  const body=await res.json();
+  const text=body?.candidates?.[0]?.content?.parts?.[0]?.text;
+  if(!text) throw new Error('AI 回應為空或格式不符（可能被安全過濾攔截）。');
+  try{
+    return JSON.parse(text);
+  }catch{
+    throw new Error('AI 回應的 JSON 格式無法解析，請重新分析一次。');
+  }
+}
+
+async function runTechAIStrategy(symbol,companyName,techAIInput,gen){
+  if(gen!==analyzeGeneration) return;
+  const el=document.getElementById('techAIBox');
+  try{
+    const result=await callGeminiJSON(buildTechAIPrompt(symbol,companyName,techAIInput),selectedModel,TECH_AI_SCHEMA,gen);
+    if(gen!==analyzeGeneration||!result) return;
+    renderTechAIStrategy(result);
+  }catch(e){
+    if(gen!==analyzeGeneration) return;
+    el.innerHTML=`<div class="error-box">⚠ AI 深度技術判讀失敗：${escapeHtml(e.message)}</div>`;
+  }
+}
+
+function renderTechAIStrategy(result){
+  const el=document.getElementById('techAIBox');
+  const sig=result.overall_signal||'';
+  const bullish=/多頭|反彈/.test(sig)&&!/弱勢|空頭/.test(sig);
+  const bearish=/弱勢|空頭/.test(sig);
+  const sigClass=bullish?'up':bearish?'down':'neutral';
+  const fp=result.fair_entry_price||{};
+  const ap=result.action_plan||{};
+  el.innerHTML=`
+<div class="conclusion-card">
+  <div class="conclusion-title">🤖 AI 深度技術判讀（合理買入價與風控策略）</div>
+  <div class="overall-signal">
+    <div class="os-label">綜合訊號</div>
+    <div class="os-val ${sigClass}">${escapeHtml(sig)}</div>
+    <div class="os-sub">${escapeHtml(result.matched_strategy||'')}</div>
+  </div>
+  ${result.technical_nuance_warning?`<div class="info-box" style="margin-top:12px;border-left:3px solid var(--amber)">⚠️ ${escapeHtml(result.technical_nuance_warning)}</div>`:''}
+  <div class="ind-card" style="margin-top:12px;background:var(--bg3)">
+    <div class="ind-title">🎯 合理買入價</div>
+    <div style="display:flex;align-items:baseline;gap:12px;margin:6px 0">
+      <span style="font-size:26px;font-weight:700;color:var(--text)">${typeof fp.recommended_price==='number'?fmt(fp.recommended_price):'N/A'}</span>
+      <span style="font-size:13px;color:var(--text3)">${escapeHtml(fp.price_range||'')}</span>
+    </div>
+    <div style="font-size:12px;color:var(--text2);line-height:1.6">${escapeHtml(fp.rationale||'')}</div>
+  </div>
+  <div class="kpi-grid" style="margin-top:12px">
+    <div class="kpi"><div class="kpi-label">建議停損價</div><div class="kpi-val down">${escapeHtml(String(ap.stop_loss??'N/A'))}</div></div>
+    <div class="kpi"><div class="kpi-label">預期目標價</div><div class="kpi-val up">${escapeHtml(String(ap.take_profit??'N/A'))}</div></div>
+  </div>
+  <div class="disclaimer" style="margin-top:12px">⚠ 本 AI 判讀基於技術指標數值推論，非投資建議，實際交易請自行評估風險並設定停損。</div>
+</div>`;
 }
 
 // ---- 籌碼面 ----
