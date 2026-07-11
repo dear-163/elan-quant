@@ -126,6 +126,7 @@ async function fetchTpexStockDayAll() {
     }
     return arr.map(r => ({
       Code: (r.SecuritiesCompanyCode || '').trim(),
+      Name: (r.CompanyName || '').trim(),
       ClosingPrice: r.Close,
       HighestPrice: r.High,
       LowestPrice: r.Low
@@ -168,14 +169,15 @@ async function updateStockPricesAndCountNewHighLow(db, todayAd, stockRows) {
     if (!code) continue;
     const close = parseNum(row.ClosingPrice), high = parseNum(row.HighestPrice), low = parseNum(row.LowestPrice);
     if (close == null) continue;
+    const name = (row.Name || '').trim() || null;
     const prior = priorMap.get(code);
     if (prior && prior.days >= STOCK_HISTORY_MIN_DAYS) {
       if (high != null && prior.max_high != null && high > prior.max_high) newHighs++;
       if (low != null && prior.min_low != null && low < prior.min_low) newLows++;
     }
     upserts.push(
-      db.prepare('INSERT OR REPLACE INTO stock_daily_price (code, date, close, high, low) VALUES (?, ?, ?, ?, ?)')
-        .bind(code, todayAd, close, high, low)
+      db.prepare('INSERT OR REPLACE INTO stock_daily_price (code, date, close, high, low, name) VALUES (?, ?, ?, ?, ?, ?)')
+        .bind(code, todayAd, close, high, low, name)
     );
   }
   await batchRun(db, upserts);

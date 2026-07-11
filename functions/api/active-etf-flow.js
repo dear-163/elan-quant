@@ -74,19 +74,21 @@ export async function onRequestGet(context) {
     // 2025-06-11 close of 1065 instead of its actual latest close of ~2460).
     const priceRows = await env.ELAN_QUANT_DB
       .prepare(`
-        SELECT p.code, p.close 
+        SELECT p.code, p.close, p.name
         FROM stock_daily_price p
         INNER JOIN (
-          SELECT code, MAX(date) as max_date 
-          FROM stock_daily_price 
+          SELECT code, MAX(date) as max_date
+          FROM stock_daily_price
           GROUP BY code
         ) m ON p.code = m.code AND p.date = m.max_date
       `)
       .all();
     const priceMap = {};
+    const nameMap = {};
     if (priceRows.results) {
       for (const p of priceRows.results) {
         priceMap[p.code] = p.close;
+        if (p.name) nameMap[p.code] = p.name;
       }
     }
 
@@ -102,25 +104,6 @@ export async function onRequestGet(context) {
       if (!portfolioValueMap[r.etf_code]) portfolioValueMap[r.etf_code] = {};
       portfolioValueMap[r.etf_code][r.date] = r.stock_value;
     }
-
-    const STOCK_NAMES = {
-      '2330': '台積電', '2454': '聯發科', '2317': '鴻海', '2308': '台達電', '2382': '廣達',
-      '5347': '世界先進', '2303': '聯電', '2603': '長榮', '3231': '緯創', '2376': '技嘉',
-      '2383': '台光電', '5274': '信驊', '2449': '京元電', '6515': '穎崴',
-      '2327': '國巨', '2345': '智邦', '3008': '大立光', '3711': '日月光投控', '2881': '富邦金',
-      '2882': '國泰金', '2301': '光寶科', '2357': '華碩', '3034': '聯詠', '2408': '南亞科',
-      '3017': '奇鋐', '3037': '欣興', '6223': '旺矽', '6669': '緯穎',
-      '1590': '亞德客-KY', '1815': '富喬', '2002': '中鋼', '2313': '華通', '2368': '金像電',
-      '2439': '美律', '2481': '強茂', '3264': '超豐', '3376': '新日興', '3443': '創意',
-      '3533': '嘉澤', '3653': '健策', '3661': '世芯-KY', '3665': '貿聯-KY', '4958': '臻鼎-KY',
-      '4966': '譜瑞-KY', '5439': '豐藝', '6147': '淇譽電', '6187': '萬潤', '6191': '精成科',
-      '6271': '同欣電', '6274': '台燿', '6278': '台表科', '6488': '環球晶', '6510': '精測',
-      '6805': '富世達', '8046': '南電', '8150': '南茂', '8210': '勤誠', '8358': '金居',
-      '8996': '高力',
-      '2059': '川湖', '2344': '華邦電', '2360': '致茂', '2412': '中華電', '2467': '志聖',
-      '3044': '健鼎', '3045': '台灣大', '3081': '聯亞', '3131': '弘塑', '4904': '遠傳',
-      '6257': '雙鴻', '7769': '汎銓', '8299': '群聯'
-    };
 
     // IF symbol is specified: return specific stock flow or active ETF flow (Option A/C)
     if (symbol) {
@@ -193,7 +176,7 @@ export async function onRequestGet(context) {
 
           flow.push({
             stockCode: code,
-            stockName: STOCK_NAMES[code] || `個股 ${code}`,
+            stockName: nameMap[code] || code,
             action,
             shares: t.shares,
             weight: t.weight,
@@ -379,7 +362,7 @@ export async function onRequestGet(context) {
       if (!agg.hasAny || agg.changeAmount === 0) continue;
       changes.push({
         stock_code: code,
-        stock_name: STOCK_NAMES[code] || ('個股 ' + code),
+        stock_name: nameMap[code] || code,
         changeAmount: agg.changeAmount,
         action: agg.changeAmount > 0 ? '買超' : '賣超',
         estimated: agg.estimated || undefined

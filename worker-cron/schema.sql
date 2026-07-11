@@ -21,6 +21,7 @@ CREATE TABLE IF NOT EXISTS stock_daily_price (
   close REAL,
   high REAL,
   low REAL,
+  name TEXT,               -- 股票中文名稱，來自 TWSE/TPEx 官方每日資料，不用維護靜態對照表
   PRIMARY KEY (code, date)
 );
 CREATE INDEX IF NOT EXISTS idx_stock_daily_price_code_date ON stock_daily_price(code, date);
