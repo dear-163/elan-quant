@@ -534,6 +534,21 @@ async function fetchCapitalHoldings(fundId) {
   })).filter(h => h.stockCode && isFinite(h.weight));
 }
 
+// 兆豐投信（megafunds.com.tw）：純伺服器渲染 HTML，不用 cookie/登入，完整持股表格（52檔）
+// 已經在單一 GET 回應裡（總權重加總剛好等於頁面上顯示的「股票(94.32%)」，確認沒有分頁/
+// 展開的隱藏資料）。之前用 ASP.NET postback（帶 __VIEWSTATE 等欄位模擬表單送出）走了很多
+// 冤枉路才發現：其實根本不需要 postback，直接帶 id query string GET 這個頁面就有完整資料。
+async function fetchMegaHoldings(id) {
+  const res = await fetch(`https://www.megafunds.com.tw/MEGA/etf/etf_product.aspx?id=${id}`, {
+    headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' },
+  });
+  if (!res.ok) throw new Error(`兆豐投信 HTTP ${res.status}`);
+  const html = await res.text();
+  const rows = [...html.matchAll(/<div class="fund-info content-list-1">\s*<div class="fund-content">(\d{4,6})<\/div>\s*<div class="fund-content">([^<]+)<\/div>\s*<div class="fund-content txt-right">([\d,]+)<\/div>\s*<div class="fund-content txt-right">([\d.]+)\s*%<\/div>\s*<\/div>/g)];
+  if (rows.length === 0) throw new Error('兆豐投信頁面內找不到持股表格（版面可能已變更）');
+  return rows.map(m => ({ stockCode: m[1], stockName: m[2].trim(), shares: parseFloat(m[3].replace(/,/g, '')), weight: parseFloat(m[4]) }));
+}
+
 async function fetchAndStoreActiveEtfHoldings(db, todayDash) {
   const etfs = [
     { code: '00981A', name: '統一台股增長主動式ETF', source: 'ezmoney', fundCode: '49YTW' },
@@ -560,13 +575,14 @@ async function fetchAndStoreActiveEtfHoldings(db, todayDash) {
     { code: '00982A', name: '群益台灣精選強棒主動式ETF', source: 'capital', fundCode: '399' },
     { code: '00992A', name: '群益台灣科技創新主動式ETF', source: 'capital', fundCode: '500' },
     { code: '00997A', name: '群益美國增長主動式ETF', source: 'capital', fundCode: '502' },
+    { code: '00996A', name: '兆豐台灣豐收主動式ETF', source: 'mega', fundCode: '23' },
   ];
 
   const fetchers = {
     ezmoney: fetchEzmoneyHoldings, nomura: fetchNomuraHoldings, kgifund: fetchKgifundHoldings,
     fubon: fetchFubonHoldings, allianz: fetchAllianzHoldings, taishin: fetchTaishinHoldings,
     ab: fetchAllianceBernsteinHoldings, ctbc: fetchCtbcHoldings, first: fetchFirstHoldings,
-    cathay: fetchCathayHoldings, capital: fetchCapitalHoldings,
+    cathay: fetchCathayHoldings, capital: fetchCapitalHoldings, mega: fetchMegaHoldings,
   };
 
   for (const etf of etfs) {
