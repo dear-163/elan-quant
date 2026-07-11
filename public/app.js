@@ -998,6 +998,19 @@ async function fetchSentiment(){
   return body;
 }
 
+// 依 sentiment.js 回傳的 format 決定原始值怎麼顯示（不同因子的原始值單位不一樣，
+// 不能全部都當成 0~1 比例 ×100 處理，例如 VIXTWN 是指數值、信用利差是百分點差值）。
+function formatSentimentRawValue(v,format){
+  if(v==null) return 'N/A';
+  switch(format){
+    case 'ratio': return (v*100).toFixed(2)+'%';
+    case 'percent': return v.toFixed(2)+'%';
+    case 'index': return v.toFixed(2);
+    case 'percent_points': return (v>=0?'+':'')+v.toFixed(3)+' 個百分點';
+    default: return String(v);
+  }
+}
+
 function renderSentiment(data){
   const el=document.getElementById('sentimentContent');
   const gaugeHtml=data.greedIndex!=null
@@ -1006,7 +1019,7 @@ function renderSentiment(data){
   const statusNote=s=>s==='accumulating'?'（資料累積中）':s==='no_data'?'（暫無資料）':'';
   const rows=(data.indicators||[]).map(ind=>{
     const scoreText=ind.status==='ready'?ind.percentileScore.toFixed(1):'--';
-    const rawText=ind.rawValue!=null?(ind.rawValue*100).toFixed(2)+'%':'N/A';
+    const rawText=formatSentimentRawValue(ind.rawValue,ind.format);
     return `<div class="ind-card">
       <div class="ind-title">${ind.label}${statusNote(ind.status)}</div>
       <div class="ind-row"><span class="ind-name">百分位分數</span><span class="ind-val">${scoreText}</span></div>
@@ -1329,3 +1342,28 @@ async function loadMarginRatio() {
   }
 }
 loadMarginRatio();
+
+// 首頁市場情緒量表。跟「市場情緒」分頁共用 sentimentGaugeSVG()／fetchSentiment()，只是精簡呈現：
+// 量表 + 計入指標數 + 資料來源清單（去重）+ 資料日期。跟其他首頁小工具一致，資料還沒成熟
+// （greedIndex 算不出來，通常是全新部署剛開始累積歷史）時就先不顯示，不占首頁版面顯示「資料累積中」。
+async function loadHomepageSentiment() {
+  try {
+    const data = await fetchSentiment();
+    if (!data || data.error || data.greedIndex == null) return;
+
+    document.getElementById('homepageSentimentGauge').innerHTML = sentimentGaugeSVG(data.greedIndex, data.level);
+    document.getElementById('homepageSentimentReady').textContent =
+      data.readyCount != null ? `共 ${data.readyCount}/${data.totalIndicators} 項指標計入本次計算` : '';
+
+    const sources = [...new Set((data.indicators || []).filter(i => i.status === 'ready').map(i => i.source))];
+    document.getElementById('homepageSentimentSources').textContent = sources.length ? `資料來源：${sources.join('、')}` : '';
+    document.getElementById('homepageSentimentDate').textContent = data.latestDate
+      ? `資料日期：${data.latestDate}${data.latestUpdatedAt ? `（台北時間 ${data.latestUpdatedAt} 更新）` : ''}`
+      : '';
+
+    document.getElementById('homepageSentimentCard').style.display = 'block';
+  } catch (e) {
+    console.error('Failed to load homepage sentiment:', e);
+  }
+}
+loadHomepageSentiment();

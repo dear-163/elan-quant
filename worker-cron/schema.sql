@@ -1,15 +1,20 @@
--- 每日全市場快照。情緒指數 5 個子指標的原始輸入都從這張表算（在讀取端 functions/api/sentiment.js 計算衍生值）。
+-- 每日全市場快照。情緒指數 7 個子指標（比照 CNN Fear & Greed Index 的 7 因子架構，換成台股對應
+-- 資料源）的原始輸入都從這張表算（在讀取端 functions/api/sentiment.js 計算衍生值）。
 -- 任何欄位當天抓不到就留 NULL，不要用 0 或估計值頂替。
 CREATE TABLE IF NOT EXISTS daily_market_data (
   date TEXT PRIMARY KEY,          -- YYYYMMDD
-  taiex_close REAL,                -- 加權指數收盤，125日均線乖離率在讀取時計算
-  advancers INTEGER,               -- 上漲家數
+  taiex_close REAL,                -- 加權指數收盤，125日均線乖離率在讀取時計算（對應CNN「股價動能」）
+  advancers INTEGER,               -- 上漲家數（對應CNN「股價廣度」）
   decliners INTEGER,               -- 下跌家數
-  new_highs INTEGER,               -- 今日創52週新高家數
+  new_highs INTEGER,               -- 今日創52週新高家數（對應CNN「股價強度」）
   new_lows INTEGER,                -- 今日創52週新低家數
-  margin_balance_total REAL,       -- 全市場融資今日餘額加總，5日變化率在讀取時計算
-  inst_net_buy_count INTEGER,      -- 三大法人合計淨買超家數
+  margin_balance_total REAL,       -- 全市場融資今日餘額加總（保留欄位，目前情緒指數未使用）
+  inst_net_buy_count INTEGER,      -- 三大法人合計淨買超家數（保留欄位，目前情緒指數未使用）
   inst_net_sell_count INTEGER,     -- 三大法人合計淨賣超家數
+  put_call_ratio REAL,             -- 臺指選擇權Put/Call成交量比(%)（對應CNN「Put/Call Ratio」），來源TAIFEX
+  vixtwn REAL,                     -- 臺指選擇權波動率指數收盤（對應CNN「VIX」），來源TAIFEX
+  govbond_10y_yield REAL,          -- 10年期公債殖利率(%)，5日變化率在讀取時計算（對應CNN「避險需求」），來源TPEx
+  corp_bond_spread REAL,           -- 公司債BBB-AAA信用利差(百分點)（對應CNN「垃圾債券需求」，台灣無真正垃圾債市場的替代指標），來源TPEx
   updated_at TEXT                  -- 排程實際寫入這筆資料當下的台北時間（HH:MM），用來驗證/公開實際資料到位時間
 );
 

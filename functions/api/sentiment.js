@@ -1,7 +1,10 @@
 // 市場情緒指數（自製「貪婪指數」）。完全依賴 D1（daily_market_data，由 worker-cron 每日排程寫入）。
-// 方法論：等權重 + 歷史百分位標準化（不是自訂加權公式）——
+// 方法論：等權重 + 歷史百分位標準化（不是自訂加權公式），比照 CNN Fear & Greed Index 的 7
+// 因子架構，每個因子換成對應的台股資料源——
 // 每個子指標的「今日原始值」拿去跟自己過去最多 252 個交易日的歷史分布比較，
-// percentile = (歷史序列中 <= 今日值 的天數) / 總天數 * 100，5 個子指標的百分位分數做簡單平均。
+// percentile = (歷史序列中 <= 今日值 的天數) / 總天數 * 100，7 個子指標的百分位分數做簡單平均。
+// 部分因子是「數值越高＝越恐懼」（VIX、Put/Call比、信用利差），這幾個在算完百分位後要
+// 用 100-分數 反轉，確保最終總分維持「越高越貪婪」的統一方向。
 const MIN_HISTORY = 60;
 const MATURE_HISTORY = 252;
 
@@ -19,15 +22,18 @@ function computeSeries(rows, mapFn) {
   return out;
 }
 
-function percentileScore(series) {
+// invert=true 代表這個因子「原始值越高＝越恐懼」，percentile 算完後用 100-分數 反轉方向，
+// 讓所有因子的最終分數統一維持「越高越貪婪」。
+function percentileScore(series, invert) {
   if (series.length === 0) return null;
   const todayValue = series[series.length - 1].value;
   const count = series.filter(s => s.value <= todayValue).length;
-  return (count / series.length) * 100;
+  const pct = (count / series.length) * 100;
+  return invert ? (100 - pct) : pct;
 }
 
-// 大盤動能：(今日指數 - 125日均線) / 125日均線。需要至少125天的 taiex_close 才能算出第一個值，
-// 這是這個子指標本身的結構性限制，不是資料抓不到——冷啟動天數會比其他4個子指標更長。
+// 股價動能：(今日指數 - 125日均線) / 125日均線。需要至少125天的 taiex_close 才能算出第一個值，
+// 這是這個子指標本身的結構性限制，不是資料抓不到——冷啟動天數會比其他因子更長。
 function indexMomentumSeries(rows) {
   return computeSeries(rows, (rows, i) => {
     if (i < 124) return null;
@@ -39,6 +45,7 @@ function indexMomentumSeries(rows) {
     return (close - ma) / ma;
   });
 }
+// 股價廣度：漲跌家數比。
 function advanceDeclineSeries(rows) {
   return computeSeries(rows, (rows, i) => {
     const r = rows[i];
@@ -47,6 +54,7 @@ function advanceDeclineSeries(rows) {
     return total > 0 ? r.advancers / total : null;
   });
 }
+// 股價強度：52週創新高低家數比。
 function newHighLowSeries(rows) {
   return computeSeries(rows, (rows, i) => {
     const r = rows[i];
@@ -55,31 +63,44 @@ function newHighLowSeries(rows) {
     return total > 0 ? r.new_highs / total : null;
   });
 }
-// 融資餘額變化率：跟5筆之前（近5個交易日）的全市場融資餘額比較，用陣列索引位移而非日曆天數。
-function marginChangeSeries(rows) {
+// Put/Call比：臺指選擇權成交量比(%)，數值越高代表避險/看跌需求越重，越恐懼。
+function putCallSeries(rows) {
+  return computeSeries(rows, (rows, i) => rows[i].put_call_ratio);
+}
+// 波動率：VIXTWN收盤，數值越高代表市場預期波動越劇烈，越恐懼。
+function vixTwnSeries(rows) {
+  return computeSeries(rows, (rows, i) => rows[i].vixtwn);
+}
+// 避險需求：10年期公債殖利率的近5日變化——殖利率上升代表資金從公債流出（追逐風險資產）＝越貪婪，
+// 殖利率下降代表資金湧入公債避險＝越恐懼。用變化量而非絕對水準，比較貼近CNN原始定義的「股債報酬差」精神。
+function govBondYieldChangeSeries(rows) {
   return computeSeries(rows, (rows, i) => {
     if (i < 5) return null;
-    const today = rows[i].margin_balance_total;
-    const prev = rows[i - 5].margin_balance_total;
-    if (today == null || prev == null || prev === 0) return null;
-    return (today - prev) / prev;
+    const today = rows[i].govbond_10y_yield;
+    const prev = rows[i - 5].govbond_10y_yield;
+    if (today == null || prev == null) return null;
+    return today - prev;
   });
 }
-function instFlowSeries(rows) {
-  return computeSeries(rows, (rows, i) => {
-    const r = rows[i];
-    if (r.inst_net_buy_count == null || r.inst_net_sell_count == null) return null;
-    const total = r.inst_net_buy_count + r.inst_net_sell_count;
-    return total > 0 ? r.inst_net_buy_count / total : null;
-  });
+// 垃圾債券需求的台股替代：公司債BBB-AAA信用利差（百分點）。利差越窄代表投資人越願意承擔信用風險
+// 換取較低評等公司債的較高收益＝越貪婪；利差越寬代表資金往安全等級靠攏＝越恐懼。
+function corpSpreadSeries(rows) {
+  return computeSeries(rows, (rows, i) => rows[i].corp_bond_spread);
 }
 
+// format 決定前端怎麼顯示 rawValue：
+//   ratio          — 0~1 的比例，前端要 ×100 顯示成 %（舊3個因子都是這個格式）
+//   percent        — 原始值本身已經是百分比數字（如 100.89 代表 100.89%），前端直接顯示、不再 ×100
+//   index          — 純數值指數（如VIXTWN的37.11），沒有%意義
+//   percent_points — 百分點差值（如殖利率變化、信用利差），顯示成「±X.XX 個百分點」
 const INDICATORS = [
-  { key: 'indexMomentum', label: '大盤動能（指數乖離率）', seriesFn: indexMomentumSeries, direction: '乖離越正 → 越貪婪', source: 'TWSE 加權指數收盤' },
-  { key: 'advanceDecline', label: '漲跌家數比', seriesFn: advanceDeclineSeries, direction: '比例越高 → 越貪婪', source: 'TWSE 每日漲跌家數統計' },
-  { key: 'newHighLow', label: '創新高低家數比', seriesFn: newHighLowSeries, direction: '比例越高 → 越貪婪', source: 'TWSE 全市場個股日成交（自行累積52週高低）' },
-  { key: 'marginChange', label: '融資餘額變化率（近5日）', seriesFn: marginChangeSeries, direction: '增幅越大 → 越貪婪', source: 'TWSE 融資融券餘額' },
-  { key: 'instFlow', label: '三大法人買超家數比', seriesFn: instFlowSeries, direction: '比例越高 → 越貪婪', source: 'TWSE 三大法人買賣超日報' },
+  { key: 'indexMomentum', label: '股價動能（加權指數乖離率）', seriesFn: indexMomentumSeries, direction: '乖離越正 → 越貪婪', source: 'TWSE 加權指數收盤', invert: false, format: 'ratio' },
+  { key: 'advanceDecline', label: '股價廣度（漲跌家數比）', seriesFn: advanceDeclineSeries, direction: '比例越高 → 越貪婪', source: 'TWSE 每日漲跌家數統計', invert: false, format: 'ratio' },
+  { key: 'newHighLow', label: '股價強度（創新高低家數比）', seriesFn: newHighLowSeries, direction: '比例越高 → 越貪婪', source: 'TWSE 全市場個股日成交（自行累積52週高低）', invert: false, format: 'ratio' },
+  { key: 'putCallRatio', label: 'Put/Call比（臺指選擇權）', seriesFn: putCallSeries, direction: '比例越高 → 越恐懼', source: 'TAIFEX 臺指選擇權Put/Call比', invert: true, format: 'percent' },
+  { key: 'vixTwn', label: '波動率（VIXTWN）', seriesFn: vixTwnSeries, direction: '數值越高 → 越恐懼', source: 'TAIFEX 臺指選擇權波動率指數', invert: true, format: 'index' },
+  { key: 'govBondYieldChange', label: '避險需求（10年公債殖利率變化）', seriesFn: govBondYieldChangeSeries, direction: '殖利率上升 → 越貪婪（資金流出債市）', source: 'TPEx 公債殖利率曲線', invert: false, format: 'percent_points' },
+  { key: 'corpBondSpread', label: '信用利差（公司債BBB-AAA，垃圾債替代指標）', seriesFn: corpSpreadSeries, direction: '利差越窄 → 越貪婪', source: 'TPEx 公司債殖利率曲線', invert: true, format: 'percent_points' },
 ];
 
 function levelOf(score) {
@@ -114,7 +135,7 @@ export async function onRequestGet(context) {
   let rows;
   try {
     const result = await env.ELAN_QUANT_DB
-      .prepare('SELECT date, taiex_close, advancers, decliners, new_highs, new_lows, margin_balance_total, inst_net_buy_count, inst_net_sell_count, updated_at FROM daily_market_data ORDER BY date ASC')
+      .prepare('SELECT date, taiex_close, advancers, decliners, new_highs, new_lows, put_call_ratio, vixtwn, govbond_10y_yield, corp_bond_spread, updated_at FROM daily_market_data ORDER BY date ASC')
       .all();
     rows = result.results || [];
   } catch (e) {
@@ -127,7 +148,7 @@ export async function onRequestGet(context) {
       readyCount: 0,
       totalIndicators: INDICATORS.length,
       greedIndex: null,
-      maturityMessage: '資料累積中，0/5 項可用（尚無任何歷史資料，請確認每日排程 Worker 已部署並執行過）。',
+      maturityMessage: `資料累積中，0/${INDICATORS.length} 項可用（尚無任何歷史資料，請確認每日排程 Worker 已部署並執行過）。`,
     }, 200, { 'Cache-Control': 'public, max-age=600' });
     context.waitUntil(cache.put(cacheKey, response.clone()));
     return response;
@@ -138,7 +159,7 @@ export async function onRequestGet(context) {
     // so scores stay relative to roughly "the past year" instead of drifting as more history piles up.
     const series = ind.seriesFn(rows).slice(-MATURE_HISTORY);
     const historyLength = series.length;
-    const base = { key: ind.key, label: ind.label, source: ind.source, direction: ind.direction, maturity: `${historyLength}/${MATURE_HISTORY}` };
+    const base = { key: ind.key, label: ind.label, source: ind.source, direction: ind.direction, format: ind.format, maturity: `${historyLength}/${MATURE_HISTORY}` };
     if (historyLength === 0) {
       return { ...base, status: 'no_data' };
     }
@@ -150,7 +171,7 @@ export async function onRequestGet(context) {
       ...base,
       status: 'ready',
       rawValue: latest.value,
-      percentileScore: percentileScore(series),
+      percentileScore: percentileScore(series, ind.invert),
       date: latest.date,
       historyLength,
     };

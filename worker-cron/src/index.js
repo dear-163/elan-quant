@@ -104,6 +104,64 @@ async function fetchInstitutionalCounts(adDate, retries = 3) {
   throw lastError;
 }
 
+// 台指選擇權 Put/Call 成交量比（%）——CNN Fear & Greed 7 因子之一，官方 TAIFEX OpenAPI，
+// 不用 cookie/登入。回應依日期新到舊排序，取第一筆即為最新一個交易日。
+async function fetchPutCallRatio() {
+  const res = await fetch('https://openapi.taifex.com.tw/v1/PutCallRatio', { headers: BROWSER_HEADERS });
+  if (!res.ok) throw new Error(`TAIFEX PutCallRatio HTTP ${res.status}`);
+  const arr = await res.json();
+  if (!Array.isArray(arr) || arr.length === 0) throw new Error('TAIFEX PutCallRatio 回應不是陣列或是空的');
+  const ratio = parseNum(arr[0]['PutCallVolumeRatio%']);
+  if (ratio == null) throw new Error('TAIFEX PutCallRatio 缺少 PutCallVolumeRatio% 欄位');
+  return ratio;
+}
+
+// 臺指選擇權波動率指數（VIXTWN，台版VIX）——CNN 7 因子之一。TAIFEX 只提供「當天這個檔案」的
+// 逐筆(15秒)資料下載，沒有匯總API，所以要抓當天的檔案、取最後一列「Last 1 min AVG」當收盤值。
+// 檔案是 Big5 編碼，但我們只需要抓最後一個數字欄位，不需要真的把中文表頭轉碼。
+// 實測發現當天檔案不一定馬上就緒（要求還沒產生的日期會回傳一般HTML頁面，不是純文字資料），
+// 所以從今天往前逐日掃描最多5天，抓到第一個能解析出數值的檔案就用那天的資料
+// （跟 fetchCathayHoldings 找「已結算日期」用的是同一種寫法）。
+async function fetchVixTwn(todayAd) {
+  const y = parseInt(todayAd.slice(0, 4), 10), m = parseInt(todayAd.slice(4, 6), 10) - 1, d = parseInt(todayAd.slice(6, 8), 10);
+  const base = Date.UTC(y, m, d);
+  for (let daysBack = 0; daysBack <= 5; daysBack++) {
+    const dt = new Date(base - daysBack * 86400000);
+    const dateStr = `${dt.getUTCFullYear()}${String(dt.getUTCMonth() + 1).padStart(2, '0')}${String(dt.getUTCDate()).padStart(2, '0')}`;
+    const res = await fetch(`https://www.taifex.com.tw/cht/7/getVixData?filesname=${dateStr}`, { headers: BROWSER_HEADERS });
+    if (!res.ok) continue;
+    const text = await res.text();
+    const lines = text.trim().split('\n').map(l => l.trim()).filter(Boolean);
+    if (lines.length === 0) continue;
+    const lastLine = lines[lines.length - 1];
+    const parts = lastLine.split(/\s+/).filter(Boolean);
+    const val = parseNum(parts[parts.length - 1]);
+    if (val != null) return val;
+  }
+  throw new Error(`TAIFEX VIXTWN 從 ${todayAd} 往前5天都抓不到有效檔案`);
+}
+
+// 10年期公債殖利率 + 公司債BBB-AAA信用利差——CNN「避險需求」跟「垃圾債券需求」因子的台股
+// 替代資料，同一個 TPEx 端點一次拿到兩個值，不用cookie/登入。
+async function fetchBondCurve() {
+  const res = await fetch('https://www.tpex.org.tw/data/bond/bondCurve.json', { headers: BROWSER_HEADERS });
+  if (!res.ok) throw new Error(`TPEx bondCurve HTTP ${res.status}`);
+  const j = await res.json();
+  const govRows = j?.bondCruve?.data;
+  if (!Array.isArray(govRows)) throw new Error('TPEx bondCurve 回應格式跟預期不符（找不到 bondCruve.data）');
+  const gov10y = govRows.find(r => r.time === 10)?.index;
+  if (gov10y == null) throw new Error('TPEx bondCurve 找不到10年期公債殖利率（time=10）');
+
+  const coRows = j?.bondCoCurve?.data;
+  if (!Array.isArray(coRows) || coRows.length === 0) throw new Error('TPEx bondCurve 回應格式跟預期不符（找不到 bondCoCurve.data）');
+  // 取最長天期（陣列最後一筆，通常是10年期）代表長天期信用利差，跟公債殖利率的天期對齊。
+  const longest = coRows[coRows.length - 1];
+  if (longest.twBBB == null || longest.twAAA == null) throw new Error('TPEx bondCurve 公司債利差缺少 twBBB/twAAA 欄位');
+  const spread = (longest.twBBB - longest.twAAA) * 100; // 原始是小數（如0.0069代表0.69個百分點），換算成百分點
+
+  return { gov10y, spread };
+}
+
 async function fetchStockDayAll() {
   const res = await fetch('https://openapi.twse.com.tw/v1/exchangeReport/STOCK_DAY_ALL', { headers: BROWSER_HEADERS });
   if (!res.ok) throw new Error(`STOCK_DAY_ALL HTTP ${res.status}`);
@@ -666,7 +724,11 @@ export default {
       return;
     }
     const { ad: todayAd, roc: todayRoc, dash: todayDash, nowHHMM } = todayDates();
-    const dayData = { date: todayAd, taiex_close: null, advancers: null, decliners: null, new_highs: null, new_lows: null, margin_balance_total: null, inst_net_buy_count: null, inst_net_sell_count: null };
+    const dayData = {
+      date: todayAd, taiex_close: null, advancers: null, decliners: null, new_highs: null, new_lows: null,
+      margin_balance_total: null, inst_net_buy_count: null, inst_net_sell_count: null,
+      put_call_ratio: null, vixtwn: null, govbond_10y_yield: null, corp_bond_spread: null,
+    };
 
     try {
       const raw = await fetchTaiexClose(todayRoc);
@@ -704,14 +766,30 @@ export default {
     } catch (e) { console.error('[cron] 更新個股價格/計算創新高低失敗：', e.message); }
 
     try {
+      dayData.put_call_ratio = await fetchPutCallRatio();
+    } catch (e) { console.error('[cron] 取得臺指選擇權Put/Call比失敗：', e.message); }
+
+    try {
+      dayData.vixtwn = await fetchVixTwn(todayAd);
+    } catch (e) { console.error('[cron] 取得VIXTWN失敗：', e.message); }
+
+    try {
+      const bond = await fetchBondCurve();
+      dayData.govbond_10y_yield = bond.gov10y;
+      dayData.corp_bond_spread = bond.spread;
+    } catch (e) { console.error('[cron] 取得公債殖利率/公司債信用利差失敗：', e.message); }
+
+    try {
       await db.prepare(`
         INSERT OR REPLACE INTO daily_market_data
-          (date, taiex_close, advancers, decliners, new_highs, new_lows, margin_balance_total, inst_net_buy_count, inst_net_sell_count, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          (date, taiex_close, advancers, decliners, new_highs, new_lows, margin_balance_total, inst_net_buy_count, inst_net_sell_count, put_call_ratio, vixtwn, govbond_10y_yield, corp_bond_spread, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `).bind(
         dayData.date, dayData.taiex_close, dayData.advancers, dayData.decliners,
         dayData.new_highs, dayData.new_lows, dayData.margin_balance_total,
-        dayData.inst_net_buy_count, dayData.inst_net_sell_count, nowHHMM
+        dayData.inst_net_buy_count, dayData.inst_net_sell_count,
+        dayData.put_call_ratio, dayData.vixtwn, dayData.govbond_10y_yield, dayData.corp_bond_spread,
+        nowHHMM
       ).run();
       console.log(`[cron] daily_market_data 寫入完成（台北時間 ${nowHHMM}）：`, JSON.stringify(dayData));
     } catch (e) {
