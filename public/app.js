@@ -1266,3 +1266,45 @@ async function loadActiveEtfRankings() {
   }
 }
 loadActiveEtfRankings();
+
+// 台股大盤三大法人買賣超排行——跟上面 loadActiveEtfRankings() 是完全不同的資料（TWSE T86
+// 全市場申報，不是主動式 ETF 持股爬蟲），不要合併成同一個函式，避免以後又搞混這兩個「賣超前五名」。
+async function loadMarketFlowRankings() {
+  try {
+    const res = await fetch('/api/market-flow?t=' + Date.now());
+    if (!res.ok) return;
+    const data = await res.json().catch(() => null);
+    if (!data || data.error || (!data.buys?.length && !data.sells?.length)) return;
+    const { date, buys, sells } = data;
+
+    const fmtAmt = v => {
+      const abs = Math.abs(v);
+      if (abs >= 1e8) return (v / 1e8).toFixed(2) + ' 億元';
+      if (abs >= 1e4) return (v / 1e4).toFixed(0) + ' 萬元';
+      return v.toLocaleString() + ' 元';
+    };
+
+    document.getElementById('marketFlowRankingsDate').textContent = date ? `更新日期：${date}` : '';
+
+    const buysHtml = (buys || []).map(b => `
+      <div style="display:flex; justify-content:space-between; align-items:center; padding: 4px 0; border-bottom: 1px dashed var(--border);">
+        <span style="font-weight:600; cursor:pointer; color:var(--text);" onclick="quickLoad('${escapeHtml(b.code)}')">${escapeHtml(b.code)} <span style="font-size:11px;font-weight:normal;color:var(--text3);margin-left:4px;">${escapeHtml(b.name || '')}</span></span>
+        <span class="up" style="font-weight:700;">+${fmtAmt(b.netAmount)}</span>
+      </div>
+    `).join('') || '<div style="color:var(--text3); text-align:center;">今日尚無買超記錄</div>';
+
+    const sellsHtml = (sells || []).map(s => `
+      <div style="display:flex; justify-content:space-between; align-items:center; padding: 4px 0; border-bottom: 1px dashed var(--border);">
+        <span style="font-weight:600; cursor:pointer; color:var(--text);" onclick="quickLoad('${escapeHtml(s.code)}')">${escapeHtml(s.code)} <span style="font-size:11px;font-weight:normal;color:var(--text3);margin-left:4px;">${escapeHtml(s.name || '')}</span></span>
+        <span class="down" style="font-weight:700;">${fmtAmt(s.netAmount)}</span>
+      </div>
+    `).join('') || '<div style="color:var(--text3); text-align:center;">今日尚無賣超記錄</div>';
+
+    document.getElementById('marketFlowTopBuys').innerHTML = buysHtml;
+    document.getElementById('marketFlowTopSells').innerHTML = sellsHtml;
+    document.getElementById('marketFlowRankings').style.display = 'block';
+  } catch (e) {
+    console.error('Failed to load market flow rankings:', e);
+  }
+}
+loadMarketFlowRankings();
