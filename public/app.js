@@ -1,4 +1,4 @@
-let currentPeriod='3mo', currentInterval='1d', currentSymbol='', selectedModel='gemini-3.5-flash';
+let currentPeriod='3mo', currentInterval='1d', currentSymbol='', selectedModel='gemini-3.1-flash-lite';
 let apiKey='', fmpKey='';
 let priceChart=null, rsiChart=null, macdChart=null;
 // Bumped on every analyze() call. Quick-load tags and the Enter-key handler both call analyze()
