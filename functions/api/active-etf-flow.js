@@ -59,13 +59,26 @@ export async function onRequestGet(context) {
     // 或某天爬蟲失敗）。如果某檔 ETF 昨天完全沒有任何持股紀錄，不能把它今天的每一檔持股都當成
     // 「昨天是 0 股，今天全部都是新買進」——那只是我們昨天沒抓到資料，不是真的建倉。這種情況下
     // 該 ETF 今天的比較要整批視為「無比較資料」，而不是逐檔算出一個看起來像加碼的假訊號。
+    //
+    // 同理，反過來也要擋：如果某檔 ETF 今天完全沒有任何持股紀錄（該次爬蟲失敗，比昨天單純
+    // 少一天資料），computeChangeAndAction 收到 t=null 會把它當成「今天股數是0」，昨天的
+    // 真實股數就會被算成「全部賣光」的假訊號——這正是2026-07-12那次多家ETF爬蟲失敗時
+    // 實際發生的案例（00982A等8檔ETF當天完全沒有任何列，被誤判成清空持股）。
     let etfsWithYesterdayData = new Set();
+    let etfsWithTodayData = new Set();
     if (yesterdayDate) {
       const etfYRows = await env.ELAN_QUANT_DB
         .prepare('SELECT DISTINCT etf_code FROM active_etf_holdings WHERE date = ?')
         .bind(yesterdayDate)
         .all();
       etfsWithYesterdayData = new Set((etfYRows.results || []).map(r => r.etf_code));
+    }
+    {
+      const etfTRows = await env.ELAN_QUANT_DB
+        .prepare('SELECT DISTINCT etf_code FROM active_etf_holdings WHERE date = ?')
+        .bind(todayDate)
+        .all();
+      etfsWithTodayData = new Set((etfTRows.results || []).map(r => r.etf_code));
     }
 
     // Fetch each code's most recent close only (not the full 245-day history) — a plain
@@ -235,6 +248,9 @@ export async function onRequestGet(context) {
       const flow = [];
       for (const code in etfMap) {
         const item = etfMap[code];
+        // 這檔ETF今天完全沒有任何持股紀錄（例如那次爬蟲失敗），不能顯示成「今天持股0股」
+        // 再對比昨天的真實股數算出一個「全部賣光」的假訊號——直接跳過這檔ETF，不納入這次比較。
+        if (!etfsWithTodayData.has(item.etf_code)) continue;
         const t = item.today;
         const y = item.yesterday;
         const etfHasYesterday = etfsWithYesterdayData.has(item.etf_code);
@@ -296,10 +312,14 @@ export async function onRequestGet(context) {
 
     // Group by (etf_code, stock_code) — skip any ETF that has no yesterday-dated rows at all
     // (e.g. just switched data source, or a one-off cron failure) so it doesn't get diffed
-    // against an effectively-empty baseline and show up as a fake full-position "buy".
+    // against an effectively-empty baseline and show up as a fake full-position "buy". Same
+    // guard in the other direction: skip any ETF missing from *today* entirely, otherwise its
+    // real yesterday holdings get diffed against an implicit "0 today" and show up as a fake
+    // full-position "sell" in the market-wide rankings (this is exactly what happened on
+    // 2026-07-12 when several issuers' crawls failed for that date).
     const pairMap = {};
     for (const r of recordsList) {
-      if (!etfsWithYesterdayData.has(r.etf_code)) continue;
+      if (!etfsWithYesterdayData.has(r.etf_code) || !etfsWithTodayData.has(r.etf_code)) continue;
       const key = r.etf_code + '|' + r.stock_code;
       if (!pairMap[key]) pairMap[key] = { etf_code: r.etf_code, stock_code: r.stock_code, today: null, yesterday: null };
       if (r.date === todayDate) pairMap[key].today = r; else pairMap[key].yesterday = r;
