@@ -87,7 +87,11 @@ async function analyze(){
     if(!data||data.length<minBars) throw new Error('數據不足（台股請加 .TW，例如 2330.TW；若已選週線，可嘗試拉長時間區間或改回日線）');
 
     document.getElementById('loadingText').textContent='正在計算技術指標⋯';
-    const techAIInput=renderTech(sym,data,info);
+    // 使用者可以直接輸入不帶.TW/.TWO的台股代號（例如"2330"），/api/quote會在伺服器端自動
+    // 補上正確後綴並透過info.symbol回傳——這裡要儘早算出resolvedSym並在後面統一使用，
+    // 不然像/api/ground這種靠副檔名判斷是不是台股的呼叫會收到沒有後綴的原始輸入而誤判。
+    const resolvedSym=info.symbol||sym;
+    const techAIInput=renderTech(resolvedSym,data,info);
 
     document.getElementById('loadingBox').classList.add('hidden');
     document.getElementById('tabBar').classList.remove('hidden');
@@ -98,16 +102,15 @@ async function analyze(){
     });
     document.querySelectorAll('.tab').forEach((t,i)=>i===0?t.classList.add('active'):t.classList.remove('active'));
 
-    const techSummary=buildTechSummary(sym,data,info);
-    const companyName=info.longName||info.shortName||sym;
-    if(apiKey) runGeminiAnalysis(sym,companyName,techSummary,myGen);
-    if(apiKey) runTechAIStrategy(sym,companyName,techAIInput,myGen);
+    const techSummary=buildTechSummary(resolvedSym,data,info);
+    const companyName=info.longName||info.shortName||resolvedSym;
+    if(apiKey) runGeminiAnalysis(resolvedSym,companyName,techSummary,myGen);
+    if(apiKey) runTechAIStrategy(resolvedSym,companyName,techAIInput,myGen);
 
     let chipData=null,sentimentData=null;
     // Chip and sentiment are independent data sources — fetch them concurrently instead of
     // sequentially so the wait before rendering (and before the AI summary can start) is roughly
     // halved, especially since chip.js does non-trivial work server-side (TDCC CSV parse + T86 calls).
-    const resolvedSym=info.symbol||sym;
     const isTW=isTaiwanSymbol(resolvedSym);
     const lc=typeof info.regularMarketPrice==='number'?info.regularMarketPrice:data[data.length-1].close;
     await Promise.all([
@@ -134,7 +137,7 @@ async function analyze(){
     ]);
     if(myGen!==analyzeGeneration) return;
 
-    runSummaryAnalysis(sym,companyName,techSummary,chipData,sentimentData,info,myGen,data);
+    runSummaryAnalysis(resolvedSym,companyName,techSummary,chipData,sentimentData,info,myGen,data);
   }catch(e){
     if(myGen!==analyzeGeneration) return; // a newer call is already in charge of the UI
     document.getElementById('errorBox').innerHTML='⚠ <strong>'+escapeHtml(e.message).replace(/\n/g,'<br>')+'</strong>';
