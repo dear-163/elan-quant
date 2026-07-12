@@ -50,40 +50,81 @@ function fmtTwAmt(v) {
 
 const TWSE_INCOME_URL = 'https://openapi.twse.com.tw/v1/opendata/t187ap06_L_ci';
 const TPEX_INCOME_URL = 'https://www.tpex.org.tw/openapi/v1/mopsfin_t187ap06_O_ci';
+const TWSE_REVENUE_URL = 'https://openapi.twse.com.tw/v1/opendata/t187ap05_L';
+const TPEX_REVENUE_URL = 'https://www.tpex.org.tw/openapi/v1/mopsfin_t187ap05_O';
+
+// 每月營收彙總表：每一列自帶月增率/年增率/累計營收年增率，是真正的「趨勢」數據——
+// 損益表只有單一季的絕對數字，這個才補得回「成長動力」需要的成長率佐證。這個端點
+// 只回傳「當月」快照，不是每家公司都剛好在這個時間點已申報（實測台積電這種大型權值股
+// 有時反而不在裡面，可能跟申報時程有關），所以要跟損益表搭配當成兩個互補來源，不是
+// 互相取代的fallback——見下方fetchTwFinancialsSummary會兩個都抓、都有就都給AI參考。
+async function fetchTwRevenueTrend(symbol, isOtc) {
+  try {
+    const res = await fetch(isOtc ? TPEX_REVENUE_URL : TWSE_REVENUE_URL);
+    if (!res.ok) return null;
+    const arr = await res.json();
+    if (!Array.isArray(arr)) return null;
+    const code = symbol.replace(/\.TWO?$/i, '');
+    const row = arr.find(r => r['公司代號'] === code);
+    if (!row) return null;
+
+    const curRev = Number(row['營業收入-當月營收']) * 1000;
+    if (!isFinite(curRev) || curRev === 0) return null;
+    const fmtPct = v => { const n = Number(v); return isFinite(n) ? (n >= 0 ? '+' : '') + n.toFixed(1) + '%' : 'N/A'; };
+    const period = String(row['資料年月'] || '');
+    const year = period.slice(0, -2), month = period.slice(-2);
+    return `民國${year}年${month}月營收 ${fmtTwAmt(curRev)}，月增率 ${fmtPct(row['營業收入-上月比較增減(%)'])}，年增率 ${fmtPct(row['營業收入-去年同月增減(%)'])}，累計營收年增率 ${fmtPct(row['累計營業收入-前期比較增減(%)'])}`;
+  } catch {
+    return null;
+  }
+}
 
 // 台股版的「近3年財報數據」grounding，抓TWSE(上市)/TPEx(上櫃)官方公開資訊，不用任何Key。
 // 只涵蓋「一般業」（科技/製造/消費類股），金融/證券/保險/金控類股這個端點沒有涵蓋，抓不到
 // 就回傳null，讀取端會顯示誠實的「無資料」。這個官方API也不支援查歷史季度，只能拿到「最新
 // 一季」，跟美股FMP版本抓近3年不一樣，回傳文字裡要明確講清楚這個差異，避免AI誤把單季數字
-// 講成3年趨勢。
+// 講成3年趨勢。月營收(fetchTwRevenueTrend)在這裡跟損益表並列抓，兩者互補：月營收有真實成長率、
+// 損益表有真實毛利/營益/淨利率，任一個抓不到都不影響另一個，只有兩個都抓不到才算真的沒資料。
 async function fetchTwFinancialsSummary(symbol) {
   const isOtc = /\.TWO$/i.test(symbol);
   const isTwse = /\.TW$/i.test(symbol) && !isOtc;
   if (!isOtc && !isTwse) return null;
   const code = symbol.replace(/\.TWO?$/i, '');
-  try {
-    const res = await fetch(isOtc ? TPEX_INCOME_URL : TWSE_INCOME_URL);
-    if (!res.ok) return null;
-    const arr = await res.json();
-    if (!Array.isArray(arr)) return null;
-    const codeField = isOtc ? 'SecuritiesCompanyCode' : '公司代號';
-    const row = arr.find(r => r[codeField] === code);
-    if (!row) return null;
 
-    const rev = Number(row['營業收入']) * 1000;
-    const ni = Number(row['本期淨利（淨損）']) * 1000;
-    const gross = Number(row['營業毛利（毛損）淨額']) * 1000;
-    const opInc = Number(row['營業利益（損失）']) * 1000;
-    if (!isFinite(rev) || rev === 0) return null;
-    const gm = isFinite(gross) ? (gross / rev * 100).toFixed(1) + '%' : 'N/A';
-    const om = isFinite(opInc) ? (opInc / rev * 100).toFixed(1) + '%' : 'N/A';
-    const nm = isFinite(ni) ? (ni / rev * 100).toFixed(1) + '%' : 'N/A';
-    const year = row['Year'] || row['年度'];
-    const season = row['Season'] || row['季別'];
-    return `民國${year}年第${season}季（單季，非3年趨勢）：營業收入 ${fmtTwAmt(rev)}，本期淨利 ${fmtTwAmt(ni)}，毛利率 ${gm}，營業利益率 ${om}，淨利率 ${nm}`;
-  } catch {
-    return null;
+  const [revTrend, quarterlyRow] = await Promise.all([
+    fetchTwRevenueTrend(symbol, isOtc),
+    (async () => {
+      try {
+        const res = await fetch(isOtc ? TPEX_INCOME_URL : TWSE_INCOME_URL);
+        if (!res.ok) return null;
+        const arr = await res.json();
+        if (!Array.isArray(arr)) return null;
+        const codeField = isOtc ? 'SecuritiesCompanyCode' : '公司代號';
+        return arr.find(r => r[codeField] === code) || null;
+      } catch {
+        return null;
+      }
+    })(),
+  ]);
+
+  let quarterlyText = null;
+  if (quarterlyRow) {
+    const rev = Number(quarterlyRow['營業收入']) * 1000;
+    const ni = Number(quarterlyRow['本期淨利（淨損）']) * 1000;
+    const gross = Number(quarterlyRow['營業毛利（毛損）淨額']) * 1000;
+    const opInc = Number(quarterlyRow['營業利益（損失）']) * 1000;
+    if (isFinite(rev) && rev !== 0) {
+      const gm = isFinite(gross) ? (gross / rev * 100).toFixed(1) + '%' : 'N/A';
+      const om = isFinite(opInc) ? (opInc / rev * 100).toFixed(1) + '%' : 'N/A';
+      const nm = isFinite(ni) ? (ni / rev * 100).toFixed(1) + '%' : 'N/A';
+      const year = quarterlyRow['Year'] || quarterlyRow['年度'];
+      const season = quarterlyRow['Season'] || quarterlyRow['季別'];
+      quarterlyText = `民國${year}年第${season}季（單季，非3年趨勢）：營業收入 ${fmtTwAmt(rev)}，本期淨利 ${fmtTwAmt(ni)}，毛利率 ${gm}，營業利益率 ${om}，淨利率 ${nm}`;
+    }
   }
+
+  if (!revTrend && !quarterlyText) return null;
+  return [revTrend, quarterlyText].filter(Boolean).join('\n');
 }
 
 // Grounds the "同業比較" table in real peer quotes instead of the model inventing comparables.
@@ -146,7 +187,7 @@ export async function onRequestGet(context) {
       source,
       groundingText: fin
         ? (source === 'tw_latest_quarter'
-          ? `\n\n【最新一季財報數據（來源：TWSE/TPEx官方公開資訊，真實數據，僅單季、不是3年趨勢，請優先採用、不要自行編造不同數字，也不要把單季數字誤講成3年趨勢）】\n${fin}`
+          ? `\n\n【最新營收/財報數據（來源：TWSE/TPEx官方公開資訊，真實數據，月營收有真實月增/年增率可用於成長動力討論，季財報僅單季、不是3年趨勢，請優先採用、不要自行編造不同數字，也不要把單季數字誤講成3年趨勢）】\n${fin}`
           : `\n\n【近3年財報數據（來源：FMP，真實數據，請優先採用，不要自行編造不同數字）】\n${fin}`)
         : `\n\n（註：目前無法取得近3年真實財報數據，請在財務健康段落明確註明此處為一般產業知識推論，並提醒使用者自行查證財報。）`,
     };
