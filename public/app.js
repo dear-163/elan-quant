@@ -674,7 +674,8 @@ ${techSummary}
 
 分析對象：${companyName}（${symbol}）
 請用繁體中文回答，格式使用 HTML（<h3><ul><li><p><strong><table>標籤），不要包含任何 markdown 或程式碼區塊標記。
-所有分析基於公開事實，不確定處請說明，多空平衡，不偏樂觀或悲觀。`;
+所有分析只能根據上方提供的數據與你確實掌握的公開事實，絕對不要編造未提供的具體數字、財報數據或新聞事件；
+不確定或缺乏依據處請直接說明「資料不足」，不要用臆測填補，多空平衡，不偏樂觀或悲觀。`;
   return `${base}\n\n${PROMPT_SECTIONS[section]}${groundingText||''}`;
 }
 
@@ -858,6 +859,7 @@ MACD=${t.macd}，Signal=${t.macdSignal}，能量柱=${t.macdHist}
 
 ---
 
+所有價位數字（合理買入價、停損、停利）必須是從上方提供的均線、樞紐點、布林通道等數值合理推算出來的，不可虛構不存在於輸入數據中的價位。
 請嚴格按照指定的 JSON Schema 輸出，不要包含任何 markdown 或程式碼區塊標記、也不要加任何 JSON 以外的說明文字。所有價位數字使用現價相同的小數位數。`;
 }
 
@@ -1411,7 +1413,8 @@ ${JSON.stringify(summaryData,null,2)}
 3. 如果任一面向的物件包含 "insufficient": true，直接說明「此面向資料不足，暫無法判讀」，不要用其他面向的資料去補推測
 4. 最後加一段：「以上僅為數據現況整理，不構成投資建議，請自行判斷或諮詢專業意見」
 5. 四個面向之間如果出現矛盾訊號（例如技術面偏多但籌碼面顯示融資異常增加），要明確點出這個矛盾，不要為了寫出「一致的結論」而選擇性忽略某一面向的數據
-6. 請用繁體中文回答，格式使用 HTML（<h3><ul><li><p><strong>標籤），不要包含 any markdown or code blocks`;
+6. 不要引用或推測上方 JSON 中沒有出現的具體數字（例如未提供的財報數字、新聞事件），只根據實際提供的資料描述
+7. 請用繁體中文回答，格式使用 HTML（<h3><ul><li><p><strong>標籤），不要包含 any markdown or code blocks`;
 }
 
 // Renders a {label: value|null} object as label/value rows (same visual language as the chip
