@@ -619,14 +619,18 @@ async function runGeminiAnalysis(symbol,companyName,techSummary,gen){
   const model=selectedModel;
   const fundGrounding=await fetchGroundingText(symbol,'fundamentals');
   if(gen!==analyzeGeneration) return;
-  await streamGemini({prompt:buildPromptClientSide(symbol,companyName,techSummary,'fundamentals',fundGrounding),model},'fundContent','🏢 公司基本面 + 財務健康（重點一、二）',false,0,gen);
+  const p1=buildPromptClientSide(symbol,companyName,techSummary,'fundamentals',fundGrounding);
+  await streamGemini({system:p1.system,prompt:p1.user,model},'fundContent','🏢 公司基本面 + 財務健康（重點一、二）',false,0,gen);
   const valGrounding=await fetchGroundingText(symbol,'valuation');
   if(gen!==analyzeGeneration) return;
-  await streamGemini({prompt:buildPromptClientSide(symbol,companyName,techSummary,'valuation',valGrounding),model},'fundContent','💰 估值合理性分析（重點三）',true,0,gen);
+  const p2=buildPromptClientSide(symbol,companyName,techSummary,'valuation',valGrounding);
+  await streamGemini({system:p2.system,prompt:p2.user,model},'fundContent','💰 估值合理性分析（重點三）',true,0,gen);
   if(gen!==analyzeGeneration) return;
-  await streamGemini({prompt:buildPromptClientSide(symbol,companyName,techSummary,'risk'),model},'riskContent','⚠️ 風險因素評估（重點四）',false,0,gen);
+  const p3=buildPromptClientSide(symbol,companyName,techSummary,'risk');
+  await streamGemini({system:p3.system,prompt:p3.user,model},'riskContent','⚠️ 風險因素評估（重點四）',false,0,gen);
   if(gen!==analyzeGeneration) return;
-  await streamGemini({prompt:buildPromptClientSide(symbol,companyName,techSummary,'conclusion'),model},'conclusionContent','📋 投資結論整理（重點五）',false,0,gen);
+  const p4=buildPromptClientSide(symbol,companyName,techSummary,'conclusion');
+  await streamGemini({system:p4.system,prompt:p4.user,model},'conclusionContent','📋 投資結論整理（重點五）',false,0,gen);
 }
 
 async function sleep(ms){return new Promise(r=>setTimeout(r,ms));}
@@ -666,17 +670,22 @@ const PROMPT_SECTIONS={
 只整理以上現況重點，不要給「強烈關注/值得追蹤/中性觀望/暫時迴避」這類分類評級，也不要給任何買進/賣出/加碼/減碼的操作建議。
 最後加免責聲明段落。`,
 };
+// 拆成 system（角色、格式規則、反幻覺規則、這個區塊要分析什麼）跟 user（實際數據）兩段，
+// 用 Gemini API 的 systemInstruction 欄位單獨傳，不要把規則跟資料混在同一個user turn裡——
+// 模型對 systemInstruction 的服從度通常比埋在一大段資料中間的指令更高。
 function buildPromptClientSide(symbol,companyName,techSummary,section,groundingText){
-  const base=`你是一位資深股票研究分析師，擁有15年以上台灣與全球股票市場研究經驗。
+  const system=`你是一位資深股票研究分析師，擁有15年以上台灣與全球股票市場研究經驗。
 
-技術面數據摘要（供參考）：
+請用繁體中文回答，格式使用 HTML（<h3><ul><li><p><strong><table>標籤），不要包含任何 markdown 或程式碼區塊標記。
+所有分析只能根據使用者提供的數據與你確實掌握的公開事實，絕對不要編造未提供的具體數字、財報數據或新聞事件；
+不確定或缺乏依據處請直接說明「資料不足」，不要用臆測填補，多空平衡，不偏樂觀或悲觀。
+
+${PROMPT_SECTIONS[section]}`;
+  const user=`技術面數據摘要（供參考）：
 ${techSummary}
 
-分析對象：${companyName}（${symbol}）
-請用繁體中文回答，格式使用 HTML（<h3><ul><li><p><strong><table>標籤），不要包含任何 markdown 或程式碼區塊標記。
-所有分析只能根據上方提供的數據與你確實掌握的公開事實，絕對不要編造未提供的具體數字、財報數據或新聞事件；
-不確定或缺乏依據處請直接說明「資料不足」，不要用臆測填補，多空平衡，不偏樂觀或悲觀。`;
-  return `${base}\n\n${PROMPT_SECTIONS[section]}${groundingText||''}`;
+分析對象：${companyName}（${symbol}）${groundingText||''}`;
+  return {system,user};
 }
 
 async function streamGemini(payload,targetId,cardTitle,append,retryCount=0,gen=null){
@@ -704,8 +713,11 @@ async function streamGemini(payload,targetId,cardTitle,append,retryCount=0,gen=n
         method:'POST',
         headers:{'Content-Type':'application/json'},
         body:JSON.stringify({
+          ...(payload.system?{systemInstruction:{parts:[{text:payload.system}]}}:{}),
           contents:[{role:'user',parts:[{text:payload.prompt}]}],
-          generationConfig:{temperature:0.7,maxOutputTokens:4096,thinkingConfig:{thinkingLevel:'low'}},
+          // 這是財經分析不是創意寫作，溫度壓低讓輸出更貼著指令走、少一點「自由發揮」——
+          // 這也是降低幻覺機率的直接手段之一，跟systemInstruction、反幻覺規則是互補的。
+          generationConfig:{temperature:0.2,maxOutputTokens:4096,thinkingConfig:{thinkingLevel:'low'}},
           safetySettings:[
             {category:'HARM_CATEGORY_HARASSMENT',threshold:'BLOCK_NONE'},
             {category:'HARM_CATEGORY_HATE_SPEECH',threshold:'BLOCK_NONE'},
@@ -788,7 +800,7 @@ async function streamGemini(payload,targetId,cardTitle,append,retryCount=0,gen=n
 // JSON輸出（合理買入價/停損/停利），不是HTML文字，所以用responseSchema強制Gemini回傳合法JSON，
 // 而不是像streamGemini那樣邊收邊顯示原始文字。
 function buildTechAIPrompt(symbol,companyName,t){
-  return `## 角色與定位
+  const system=`## 角色與定位
 你是一位資深的台股（TWSE/TPEx）短線造市商與量化交易員。你的任務是讀取以下技術指標、關鍵價位與現價，進行多空動能的深度審查。
 
 你必須看穿數值背後的「市場陷阱」，計算出符合風險報酬比的合理買入價，並輸出兼具實戰價值的結構化交易策略。
@@ -827,7 +839,10 @@ function buildTechAIPrompt(symbol,companyName,t){
 
 ---
 
-## 本次分析標的與即時數據
+所有價位數字（合理買入價、停損、停利）必須是從使用者提供的均線、樞紐點、布林通道等數值合理推算出來的，不可虛構不存在於輸入數據中的價位。
+請嚴格按照指定的 JSON Schema 輸出，不要包含任何 markdown 或程式碼區塊標記、也不要加任何 JSON 以外的說明文字。所有價位數字使用現價相同的小數位數。`;
+
+  const user=`## 本次分析標的與即時數據
 
 股票：${companyName}（${symbol}）
 現價：${t.lc}
@@ -855,12 +870,9 @@ MACD=${t.macd}，Signal=${t.macdSignal}，能量柱=${t.macdHist}
 樞紐 R1=${t.pivR1} R2=${t.pivR2}
 樞紐 S1=${t.pivS1} S2=${t.pivS2}
 20日高低=${t.r1}/${t.s1}，60日高低=${t.r2}/${t.s2}
-52週高低=${t.h52}/${t.l52}
+52週高低=${t.h52}/${t.l52}`;
 
----
-
-所有價位數字（合理買入價、停損、停利）必須是從上方提供的均線、樞紐點、布林通道等數值合理推算出來的，不可虛構不存在於輸入數據中的價位。
-請嚴格按照指定的 JSON Schema 輸出，不要包含任何 markdown 或程式碼區塊標記、也不要加任何 JSON 以外的說明文字。所有價位數字使用現價相同的小數位數。`;
+  return {system,user};
 }
 
 const TECH_AI_SCHEMA={
@@ -892,7 +904,7 @@ const TECH_AI_SCHEMA={
 
 // 跟streamGemini走同一套429/503重試與額度偵測邏輯，但streamGemini是綁定SSE串流+特定DOM結構寫死的，
 // 硬要共用會讓兩邊都變難讀，這裡另外寫一份非串流版本（等JSON全部回來才parse，不能一邊收一邊顯示半個JSON）。
-async function callGeminiJSON(prompt,model,schema,gen,retryCount=0){
+async function callGeminiJSON(system,prompt,model,schema,gen,retryCount=0){
   if(gen!=null&&gen!==analyzeGeneration) return null;
   const el=document.getElementById('techAIBox');
   if(retryCount===0){
@@ -909,9 +921,12 @@ async function callGeminiJSON(prompt,model,schema,gen,retryCount=0){
       method:'POST',
       headers:{'Content-Type':'application/json'},
       body:JSON.stringify({
+        ...(system?{systemInstruction:{parts:[{text:system}]}}:{}),
         contents:[{role:'user',parts:[{text:prompt}]}],
         generationConfig:{
-          temperature:0.4,
+          // 這裡直接輸出具體交易價位，比其他文字分析更需要壓低隨機性——溫度比streamGemini
+          // 的0.2更低，讓模型盡量貼著systemInstruction裡的計算規則走，少一點自由發揮空間。
+          temperature:0.1,
           maxOutputTokens:2048,
           responseMimeType:'application/json',
           responseSchema:schema,
@@ -941,7 +956,7 @@ async function callGeminiJSON(prompt,model,schema,gen,retryCount=0){
         el.innerHTML=`<div style="color:var(--amber);font-size:13px;padding:8px 0">⏳ AI 服務短暫忙碌，等待 ${waitSec} 秒後重試（第 ${retryCount+1}/2 次）⋯</div>`;
         await sleep(waitSec*1000);
         if(gen!=null&&gen!==analyzeGeneration) return null;
-        return callGeminiJSON(prompt,model,schema,gen,retryCount+1);
+        return callGeminiJSON(system,prompt,model,schema,gen,retryCount+1);
       }
       if(limitNum&&/free_tier_requests/i.test(errMsg)){
         const altSuggestion=model==='gemini-3.1-flash-lite'?'3.5 Flash 或 3.5 Pro':'3.1 Flash-Lite';
@@ -968,7 +983,8 @@ async function runTechAIStrategy(symbol,companyName,techAIInput,gen){
   if(gen!==analyzeGeneration) return;
   const el=document.getElementById('techAIBox');
   try{
-    const result=await callGeminiJSON(buildTechAIPrompt(symbol,companyName,techAIInput),selectedModel,TECH_AI_SCHEMA,gen);
+    const {system,user}=buildTechAIPrompt(symbol,companyName,techAIInput);
+    const result=await callGeminiJSON(system,user,selectedModel,TECH_AI_SCHEMA,gen);
     if(gen!==analyzeGeneration||!result) return;
     renderTechAIStrategy(result);
   }catch(e){
@@ -1398,14 +1414,9 @@ function buildSummaryData(info,techSummary,chipData,sentimentData,data){
 }
 
 function buildSummaryPrompt(symbol,companyName,summaryData){
-  return`你是一位協助整理股票多面向數據的助手。根據以下技術面、基本面、籌碼面、市場情緒面的數據，
+  const system=`你是一位協助整理股票多面向數據的助手。根據使用者提供的技術面、基本面、籌碼面、市場情緒面的數據，
 用繁體中文寫一份 4 段的摘要，每段對應一個面向，只描述「數據呈現什麼現況」，例如：
 「技術面：RSI 為 72，處於超買區間；MACD 呈現黃金交叉，短期動能偏強」
-
-分析對象：${companyName}（${symbol}）
-
-資料（JSON，"insufficient": true 代表該面向資料不足）：
-${JSON.stringify(summaryData,null,2)}
 
 嚴格規則：
 1. 絕對不要說「建議買進」「建議賣出」「現在是好的進場點」這類操作建議
@@ -1413,8 +1424,15 @@ ${JSON.stringify(summaryData,null,2)}
 3. 如果任一面向的物件包含 "insufficient": true，直接說明「此面向資料不足，暫無法判讀」，不要用其他面向的資料去補推測
 4. 最後加一段：「以上僅為數據現況整理，不構成投資建議，請自行判斷或諮詢專業意見」
 5. 四個面向之間如果出現矛盾訊號（例如技術面偏多但籌碼面顯示融資異常增加），要明確點出這個矛盾，不要為了寫出「一致的結論」而選擇性忽略某一面向的數據
-6. 不要引用或推測上方 JSON 中沒有出現的具體數字（例如未提供的財報數字、新聞事件），只根據實際提供的資料描述
+6. 不要引用或推測使用者提供的 JSON 中沒有出現的具體數字（例如未提供的財報數字、新聞事件），只根據實際提供的資料描述
 7. 請用繁體中文回答，格式使用 HTML（<h3><ul><li><p><strong>標籤），不要包含 any markdown or code blocks`;
+
+  const user=`分析對象：${companyName}（${symbol}）
+
+資料（JSON，"insufficient": true 代表該面向資料不足）：
+${JSON.stringify(summaryData,null,2)}`;
+
+  return {system,user};
 }
 
 // Renders a {label: value|null} object as label/value rows (same visual language as the chip
@@ -1454,9 +1472,9 @@ function renderSummaryRawData(summaryData){
 }
 async function runSummaryAnalysis(symbol,companyName,techSummary,chipData,sentimentData,info,gen,data){
   const summaryData=buildSummaryData(info,techSummary,chipData,sentimentData,data);
-  const prompt=buildSummaryPrompt(symbol,companyName,summaryData);
+  const {system,user}=buildSummaryPrompt(symbol,companyName,summaryData);
   if(apiKey){
-    await streamGemini({prompt,model:selectedModel},'summaryContent','🧭 四面向綜合摘要',false,0,gen);
+    await streamGemini({system,prompt:user,model:selectedModel},'summaryContent','🧭 四面向綜合摘要',false,0,gen);
   }else{
     const needsKey='<div class="info-box">⚠️ 尚未設定 Gemini API Key，無法產生 AI 綜合摘要。請點上方「🔑 使用自己的 API Key」進行設定。</div>';
     document.getElementById('summaryContent').innerHTML=needsKey;
