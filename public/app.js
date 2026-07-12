@@ -620,11 +620,18 @@ async function runGeminiAnalysis(symbol,companyName,techSummary,gen){
   const fundGrounding=await fetchGroundingText(symbol,'fundamentals');
   if(gen!==analyzeGeneration) return;
   const p1=buildPromptClientSide(symbol,companyName,techSummary,'fundamentals',fundGrounding);
-  await streamGemini({system:p1.system,prompt:p1.user,model},'fundContent','🏢 公司基本面 + 財務健康（重點一、二）',false,0,gen);
+  // 這個標示是程式碼固定渲染的，不是叫AI自己講——重點一（商業模式/護城河/客戶結構/成長動力）
+  // 目前完全沒有即時資料grounding，一律要標；重點二（財務健康數字）則視這次symbol有沒有
+  // 抓到FMP真實財報而定（fundGrounding裡有沒有"來源：FMP"這串字可以判斷）。
+  const fundHasRealData=fundGrounding.includes('來源：FMP');
+  const fundNote=`📌 資料來源標示：<b>商業模式／護城河／客戶結構／成長動力</b>完全基於 AI 一般知識，非即時資料，可能有時效落差，請自行查證公司最新公告與新聞。<b>財務健康數字</b>${fundHasRealData?'已用 FMP 近3年真實財報數據佐證':'目前沒有真實財報佐證（僅美股支援即時財報 grounding），同樣基於 AI 一般知識'}。`;
+  await streamGemini({system:p1.system,prompt:p1.user,model,note:fundNote},'fundContent','🏢 公司基本面 + 財務健康（重點一、二）',false,0,gen);
   const valGrounding=await fetchGroundingText(symbol,'valuation');
   if(gen!==analyzeGeneration) return;
   const p2=buildPromptClientSide(symbol,companyName,techSummary,'valuation',valGrounding);
-  await streamGemini({system:p2.system,prompt:p2.user,model},'fundContent','💰 估值合理性分析（重點三）',true,0,gen);
+  const valHasRealData=valGrounding.includes('來源：FMP');
+  const valNote=`📌 資料來源標示：估值倍數與歷史區間判斷基於 AI 一般知識；同業比較表${valHasRealData?'已用 FMP 真實同業股價/本益比數據佐證':'目前沒有真實同業數據佐證（僅美股支援），同樣基於 AI 一般知識，請自行查證'}。`;
+  await streamGemini({system:p2.system,prompt:p2.user,model,note:valNote},'fundContent','💰 估值合理性分析（重點三）',true,0,gen);
   if(gen!==analyzeGeneration) return;
   const p3=buildPromptClientSide(symbol,companyName,techSummary,'risk');
   await streamGemini({system:p3.system,prompt:p3.user,model},'riskContent','⚠️ 風險因素評估（重點四）',false,0,gen);
@@ -695,7 +702,10 @@ async function streamGemini(payload,targetId,cardTitle,append,retryCount=0,gen=n
   const cardId='gc-'+Math.random().toString(36).slice(2);
   const card=document.createElement('div');
   card.className='fund-card';
-  card.innerHTML='<div class="fund-card-title">'+cardTitle+'</div><div class="fund-content streaming" id="'+cardId+'"></div>';
+  // payload.note是程式碼固定渲染的資料來源標示（不是叫AI自己講），避免使用者誤以為整張卡片
+  // 都有真實數據佐證——不管這次AI輸出品質如何，這個標示都會準確顯示，不依賴AI是否服從指令。
+  const noteHtml=payload.note?`<div class="info-box" style="margin-bottom:12px;border-left:3px solid var(--amber);font-size:12px;padding:10px 14px">${payload.note}</div>`:'';
+  card.innerHTML='<div class="fund-card-title">'+cardTitle+'</div>'+noteHtml+'<div class="fund-content streaming" id="'+cardId+'"></div>';
   if(append) el.appendChild(card);
   else{ el.innerHTML=''; el.appendChild(card); }
   const contentEl=document.getElementById(cardId);
