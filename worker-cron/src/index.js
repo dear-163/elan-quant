@@ -685,6 +685,7 @@ async function fetchAndStoreActiveEtfHoldings(db, todayDash) {
     yuanta: fetchYuantaHoldings, jpmorgan: fetchJpmorganHoldings,
   };
 
+  const failedCodes = [];
   for (const etf of etfs) {
     try {
       const fetcher = fetchers[etf.source];
@@ -693,6 +694,7 @@ async function fetchAndStoreActiveEtfHoldings(db, todayDash) {
 
       if (holdings.length === 0) {
         console.error(`[cron-etf] parsed 0 holdings for ${etf.code}`);
+        failedCodes.push(etf.code);
         continue;
       }
 
@@ -712,8 +714,14 @@ async function fetchAndStoreActiveEtfHoldings(db, todayDash) {
       console.log(`[cron-etf] successfully stored ${holdings.length} holdings for ${etf.code} (${etf.source}) on ${todayDash}`);
     } catch (e) {
       console.error(`[cron-etf] Error crawling ${etf.code} (${etf.source}):`, e.message);
+      failedCodes.push(etf.code);
     }
   }
+  // 單獨一行彙總結果——26檔逐一的log訊息很難一眼看出「今天整體狀況正不正常」，這行讓人
+  // (或之後的我) 打開 Cloudflare 的 log 只看最後一行就知道要不要往上翻查特定ETF的錯誤細節。
+  // 這不會阻止資料缺漏（缺漏本身是預期內、且已在active-etf-flow.js正確處理的情境），
+  // 純粹是讓「缺漏正在發生」這件事更容易被人發現，不用等使用者回報才知道。
+  console.log(`[cron-etf] 本次執行完畢：${etfs.length - failedCodes.length}/${etfs.length} 檔成功，失敗：${failedCodes.length ? failedCodes.join('、') : '無'}`);
 }
 
 export default {
