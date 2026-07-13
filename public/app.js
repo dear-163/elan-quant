@@ -853,6 +853,9 @@ function buildTechAIPrompt(symbol,companyName,t){
     *   計算參考：合理買入價應設定在 樞紐 S1 至 樞紐 S2 之間，或接近 布林下軌 處，此時買入的防守成本最低。
 3.  風控期望值過濾（硬性限制）：
     *   合理買入價必須滿足：(預期獲利目標 − 合理買入價) / (合理買入價 − 建議停損價) ≥ 2（風險報酬比至少 1:2）。若現價進場不符合此比例，必須在合理買入價中進行「壓低修正」。
+4.  停損價不可設在「正常波動雜訊範圍內」（硬性限制）：
+    *   停損價不能只是合理買入價往下隨便扣一個小數字——必須設在一個真正的技術破壞點（例如跌破樞紐 S2、跌破布林下軌、或跌破近期真正的低點support），且距離合理買入價至少要達到布林通道寬度（上軌−下軌）的 15% 以上。
+    *   若停損設得太緊（例如只是合理買入價的 1-2%），代表這支股票正常的日內波動就足以洗出這個停損，不是有效的風控，必須往下修正到更保守、真正反映技術破壞的價位。
 
 ---
 
@@ -1034,6 +1037,18 @@ function validateTechAIStrategy(result,techAIInput){
     const buffer=(h52-l52)*0.15;
     if(entry>h52+buffer||entry<l52-buffer){
       warnings.push(`合理買入價（${entry}）明顯超出52週價格區間（${l52}~${h52}），疑似幻覺數字`);
+    }
+  }
+
+  // 停損太緊的問題不是「數字順序錯」，是「正常價格雜訊就會把停損打掉」，prompt指令沒辦法
+  // 保證AI真的照做，這裡用布林通道寬度（20日的實際波動幅度）當波動性的客觀量尺，量化檢查
+  // 停損距離是不是明顯小於這支股票正常的日內/短期波動——是的話代表這個停損不是有效風控。
+  const bbUpper=parseNumLoose(techAIInput.bbUpper),bbLower=parseNumLoose(techAIInput.bbLower);
+  if(entry!=null&&stopLoss!=null&&stopLoss<entry&&bbUpper!=null&&bbLower!=null&&bbUpper>bbLower){
+    const bbWidth=bbUpper-bbLower;
+    const stopDistance=entry-stopLoss;
+    if(stopDistance<bbWidth*0.2){
+      warnings.push(`停損距離（${stopDistance.toFixed(2)}）只有布林通道寬度（${bbWidth.toFixed(2)}）的 ${((stopDistance/bbWidth)*100).toFixed(0)}%，可能過緊——這支股票正常的價格波動就足以觸發停損，不是有效的風控設定`);
     }
   }
 
