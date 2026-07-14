@@ -1755,3 +1755,136 @@ async function loadHomepageSentiment() {
   }
 }
 loadHomepageSentiment();
+
+// ─────────────────────────────────────────────
+// 首頁大盤走勢圖
+// ─────────────────────────────────────────────
+let marketIndexChartInstance = null;
+let currentMarketSymbol = 'TWII';
+let currentMarketRange = '3mo';
+
+const MARKET_SYMBOL_LABELS = {
+  TWII: '台灣加權指數',
+  SPX: 'S&P 500',
+  NDX: 'Nasdaq Composite',
+  SOX: '費城半導體指數',
+};
+
+function switchMarketSymbol(sym, btn) {
+  currentMarketSymbol = sym;
+  document.querySelectorAll('[id^="mktSymBtn"]').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+  loadMarketChart();
+}
+
+function switchMarketRange(range, btn) {
+  currentMarketRange = range;
+  document.querySelectorAll('[id^="mktRngBtn"]').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+  loadMarketChart();
+}
+
+async function loadMarketChart() {
+  const loadingEl = document.getElementById('marketChartLoading');
+  const metaEl = document.getElementById('marketChartMeta');
+  if (loadingEl) loadingEl.style.display = 'flex';
+  if (metaEl) metaEl.textContent = '';
+
+  try {
+    const res = await fetch(`/api/market-chart?symbol=${currentMarketSymbol}&range=${currentMarketRange}&t=${Date.now()}`);
+    if (!res.ok) throw new Error('API error');
+    const data = await res.json();
+    if (data.error) throw new Error(data.error);
+
+    const candles = data.candles || [];
+    if (candles.length < 2) throw new Error('資料不足');
+
+    const labels = candles.map(c => {
+      const d = new Date(c.t);
+      return `${d.getMonth()+1}/${d.getDate()}`;
+    });
+    const closes = candles.map(c => c.c);
+
+    const firstClose = closes[0];
+    const lastClose = closes[closes.length - 1];
+    const pctChange = ((lastClose - firstClose) / firstClose * 100);
+    const isUp = pctChange >= 0;
+    const lineColor = isUp ? 'rgba(255,82,82,0.9)' : 'rgba(0,230,118,0.9)';
+    const fillColor = isUp ? 'rgba(255,82,82,0.08)' : 'rgba(0,230,118,0.08)';
+
+    if (metaEl) {
+      metaEl.innerHTML = `<span style="color:${isUp ? 'var(--red)' : 'var(--green)'}; font-weight:700;">${lastClose.toLocaleString(undefined,{minimumFractionDigits:0,maximumFractionDigits:2})} ${isUp ? '▲' : '▼'} ${Math.abs(pctChange).toFixed(2)}%</span>`;
+    }
+
+    const canvas = document.getElementById('marketIndexChart');
+    if (!canvas) return;
+
+    if (marketIndexChartInstance) {
+      marketIndexChartInstance.destroy();
+      marketIndexChartInstance = null;
+    }
+
+    if (loadingEl) loadingEl.style.display = 'none';
+
+    marketIndexChartInstance = new Chart(canvas, {
+      type: 'line',
+      data: {
+        labels,
+        datasets: [{
+          data: closes,
+          borderColor: lineColor,
+          backgroundColor: fillColor,
+          borderWidth: 1.5,
+          pointRadius: 0,
+          pointHoverRadius: 4,
+          fill: true,
+          tension: 0.2,
+        }],
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        interaction: { mode: 'index', intersect: false },
+        plugins: {
+          legend: { display: false },
+          tooltip: {
+            backgroundColor: 'rgba(22,22,30,0.95)',
+            titleColor: '#9090a8',
+            bodyColor: '#e8e8f0',
+            borderColor: 'rgba(255,255,255,0.1)',
+            borderWidth: 1,
+            callbacks: {
+              title: (items) => items[0]?.label || '',
+              label: (item) => `  ${MARKET_SYMBOL_LABELS[currentMarketSymbol]}: ${Number(item.raw).toLocaleString(undefined,{minimumFractionDigits:0,maximumFractionDigits:2})}`,
+            },
+          },
+        },
+        scales: {
+          x: {
+            ticks: {
+              color: '#5a5a72',
+              font: { size: 10 },
+              maxTicksLimit: 6,
+              maxRotation: 0,
+            },
+            grid: { color: 'rgba(255,255,255,0.04)' },
+          },
+          y: {
+            ticks: {
+              color: '#5a5a72',
+              font: { size: 10 },
+              callback: v => v >= 10000 ? (v/1000).toFixed(0)+'k' : v.toLocaleString(),
+            },
+            grid: { color: 'rgba(255,255,255,0.04)' },
+            position: 'right',
+          },
+        },
+      },
+    });
+  } catch (e) {
+    if (loadingEl) loadingEl.textContent = '資料載入失敗';
+    console.error('Market chart error:', e);
+  }
+}
+
+loadMarketChart();
