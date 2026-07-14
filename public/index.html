@@ -138,29 +138,13 @@
         <div style="font-size: 10px; color: var(--text3); margin-top: 2px;" id="homepageSentimentDate"></div>
       </div>
     </div>
-    <div id="marketChartSection" style="margin-top:30px; text-align:left; max-width:760px; margin-left:auto; margin-right:auto;">
+    <div id="marketLiveSection" style="margin-top:30px; text-align:left; max-width:760px; margin-left:auto; margin-right:auto;">
       <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px; flex-wrap:wrap; gap:8px;">
-        <div style="font-size:13px; font-weight:700; color:var(--text);">📈 大盤走勢</div>
-        <div style="display:flex; gap:6px; align-items:center; flex-wrap:wrap;">
-          <div style="display:flex; gap:4px;">
-            <button class="btn-ghost active" id="mktSymBtnTWII" onclick="switchMarketSymbol('TWII',this)" style="font-size:11px; padding:4px 10px;">台指</button>
-            <button class="btn-ghost" id="mktSymBtnSPX" onclick="switchMarketSymbol('SPX',this)" style="font-size:11px; padding:4px 10px;">SPX</button>
-            <button class="btn-ghost" id="mktSymBtnNDX" onclick="switchMarketSymbol('NDX',this)" style="font-size:11px; padding:4px 10px;">Nasdaq</button>
-            <button class="btn-ghost" id="mktSymBtnSOX" onclick="switchMarketSymbol('SOX',this)" style="font-size:11px; padding:4px 10px;">費半</button>
-          </div>
-          <div style="display:flex; gap:4px;">
-            <button class="btn-ghost active" id="mktRngBtn3mo" onclick="switchMarketRange('3mo',this)" style="font-size:11px; padding:4px 10px;">3月</button>
-            <button class="btn-ghost" id="mktRngBtn6mo" onclick="switchMarketRange('6mo',this)" style="font-size:11px; padding:4px 10px;">6月</button>
-            <button class="btn-ghost" id="mktRngBtn1y" onclick="switchMarketRange('1y',this)" style="font-size:11px; padding:4px 10px;">1年</button>
-          </div>
-          <span id="marketChartMeta" style="font-size:10px; color:var(--text3);"></span>
-        </div>
+        <div style="font-size:13px; font-weight:700; color:var(--text);">📊 大盤即時報價</div>
+        <span id="marketLiveTime" style="font-size:10px; color:var(--text3);"></span>
       </div>
-      <div class="ind-card" style="padding:12px 14px; background:var(--bg3);">
-        <div style="position:relative; height:180px;">
-          <canvas id="marketIndexChart"></canvas>
-          <div id="marketChartLoading" style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;color:var(--text3);font-size:12px;">載入中…</div>
-        </div>
+      <div id="marketLiveBoard" style="display:grid; grid-template-columns:repeat(auto-fit,minmax(140px,1fr)); gap:10px;">
+        <div style="text-align:center; padding:20px; color:var(--text3); font-size:12px; grid-column:1/-1;">載入中…</div>
       </div>
     </div>
     <p style="margin-top:24px;font-size:12px;color:var(--text3)">技術數據：Yahoo Finance｜基本面：Google Gemini AI｜僅供參考，不構成投資建議</p>

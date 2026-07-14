@@ -1757,134 +1757,64 @@ async function loadHomepageSentiment() {
 loadHomepageSentiment();
 
 // ─────────────────────────────────────────────
-// 首頁大盤走勢圖
+// 首頁大盤即時報價看板
 // ─────────────────────────────────────────────
-let marketIndexChartInstance = null;
-let currentMarketSymbol = 'TWII';
-let currentMarketRange = '3mo';
+let marketLiveTimer = null;
 
-const MARKET_SYMBOL_LABELS = {
-  TWII: '台灣加權指數',
-  SPX: 'S&P 500',
-  NDX: 'Nasdaq Composite',
-  SOX: '費城半導體指數',
-};
-
-function switchMarketSymbol(sym, btn) {
-  currentMarketSymbol = sym;
-  document.querySelectorAll('[id^="mktSymBtn"]').forEach(b => b.classList.remove('active'));
-  btn.classList.add('active');
-  loadMarketChart();
+function fmtIndex(v, decimals = 2) {
+  if (v == null || !isFinite(v)) return '—';
+  return v.toLocaleString('zh-TW', { minimumFractionDigits: decimals, maximumFractionDigits: decimals });
 }
 
-function switchMarketRange(range, btn) {
-  currentMarketRange = range;
-  document.querySelectorAll('[id^="mktRngBtn"]').forEach(b => b.classList.remove('active'));
-  btn.classList.add('active');
-  loadMarketChart();
+function renderMarketCard(d, shortLabel) {
+  if (!d) return `<div class="ind-card" style="padding:12px 14px;background:var(--bg3);opacity:.4;font-size:12px;color:var(--text3);text-align:center;">無資料</div>`;
+  const isUp = d.change >= 0;
+  const color = isUp ? 'var(--red)' : 'var(--green)';
+  const arrow = isUp ? '▲' : '▼';
+  const changePctStr = d.changePct != null ? `${Math.abs(d.changePct).toFixed(2)}%` : '';
+  const changeStr = `${arrow} ${fmtIndex(Math.abs(d.change))} (${changePctStr})`;
+  const timeStr = d.time ? `<div style="font-size:9px;color:var(--text3);margin-top:2px;">${d.date ? d.date.replace(/(\d{4})(\d{2})(\d{2})/, '$1/$2/$3') + ' ' : ''}${d.time}</div>` : '';
+  const highLow = (d.high && d.low) ? `<div style="font-size:9px;color:var(--text3);margin-top:3px;">H:${fmtIndex(d.high)} L:${fmtIndex(d.low)}</div>` : '';
+  return `
+    <div class="ind-card" style="padding:12px 14px;background:var(--bg3);">
+      <div style="font-size:10px;color:var(--text3);font-weight:700;text-transform:uppercase;margin-bottom:4px;">${escapeHtml(shortLabel)}</div>
+      <div style="font-size:20px;font-weight:700;color:var(--text);letter-spacing:-0.5px;">${fmtIndex(d.current)}</div>
+      <div style="font-size:12px;font-weight:600;color:${color};margin-top:2px;">${changeStr}</div>
+      ${timeStr}${highLow}
+    </div>`;
 }
 
-async function loadMarketChart() {
-  const loadingEl = document.getElementById('marketChartLoading');
-  const metaEl = document.getElementById('marketChartMeta');
-  if (loadingEl) loadingEl.style.display = 'flex';
-  if (metaEl) metaEl.textContent = '';
-
+async function loadMarketLive() {
+  const board = document.getElementById('marketLiveBoard');
+  const timeEl = document.getElementById('marketLiveTime');
   try {
-    const res = await fetch(`/api/market-chart?symbol=${currentMarketSymbol}&range=${currentMarketRange}&t=${Date.now()}`);
+    const res = await fetch('/api/market-chart?t=' + Date.now());
     if (!res.ok) throw new Error('API error');
     const data = await res.json();
-    if (data.error) throw new Error(data.error);
 
-    const candles = data.candles || [];
-    if (candles.length < 2) throw new Error('資料不足');
+    const cards = [
+      renderMarketCard(data.tw?.taiex, '台指 TAIEX'),
+      renderMarketCard(data.tw?.otc, '櫃買 OTC'),
+      renderMarketCard(data.us?.spx, 'S&P 500'),
+      renderMarketCard(data.us?.ndx, 'Nasdaq'),
+      renderMarketCard(data.us?.sox, '費半 SOX'),
+    ].join('');
 
-    const labels = candles.map(c => {
-      const d = new Date(c.t);
-      return `${d.getMonth()+1}/${d.getDate()}`;
-    });
-    const closes = candles.map(c => c.c);
-
-    const firstClose = closes[0];
-    const lastClose = closes[closes.length - 1];
-    const pctChange = ((lastClose - firstClose) / firstClose * 100);
-    const isUp = pctChange >= 0;
-    const lineColor = isUp ? 'rgba(255,82,82,0.9)' : 'rgba(0,230,118,0.9)';
-    const fillColor = isUp ? 'rgba(255,82,82,0.08)' : 'rgba(0,230,118,0.08)';
-
-    if (metaEl) {
-      metaEl.innerHTML = `<span style="color:${isUp ? 'var(--red)' : 'var(--green)'}; font-weight:700;">${lastClose.toLocaleString(undefined,{minimumFractionDigits:0,maximumFractionDigits:2})} ${isUp ? '▲' : '▼'} ${Math.abs(pctChange).toFixed(2)}%</span>`;
+    if (board) board.innerHTML = cards;
+    if (timeEl) {
+      const now = new Date();
+      timeEl.textContent = `更新：${now.getHours().toString().padStart(2,'0')}:${now.getMinutes().toString().padStart(2,'0')}:${now.getSeconds().toString().padStart(2,'0')}`;
     }
-
-    const canvas = document.getElementById('marketIndexChart');
-    if (!canvas) return;
-
-    if (marketIndexChartInstance) {
-      marketIndexChartInstance.destroy();
-      marketIndexChartInstance = null;
-    }
-
-    if (loadingEl) loadingEl.style.display = 'none';
-
-    marketIndexChartInstance = new Chart(canvas, {
-      type: 'line',
-      data: {
-        labels,
-        datasets: [{
-          data: closes,
-          borderColor: lineColor,
-          backgroundColor: fillColor,
-          borderWidth: 1.5,
-          pointRadius: 0,
-          pointHoverRadius: 4,
-          fill: true,
-          tension: 0.2,
-        }],
-      },
-      options: {
-        responsive: true,
-        maintainAspectRatio: false,
-        interaction: { mode: 'index', intersect: false },
-        plugins: {
-          legend: { display: false },
-          tooltip: {
-            backgroundColor: 'rgba(22,22,30,0.95)',
-            titleColor: '#9090a8',
-            bodyColor: '#e8e8f0',
-            borderColor: 'rgba(255,255,255,0.1)',
-            borderWidth: 1,
-            callbacks: {
-              title: (items) => items[0]?.label || '',
-              label: (item) => `  ${MARKET_SYMBOL_LABELS[currentMarketSymbol]}: ${Number(item.raw).toLocaleString(undefined,{minimumFractionDigits:0,maximumFractionDigits:2})}`,
-            },
-          },
-        },
-        scales: {
-          x: {
-            ticks: {
-              color: '#5a5a72',
-              font: { size: 10 },
-              maxTicksLimit: 6,
-              maxRotation: 0,
-            },
-            grid: { color: 'rgba(255,255,255,0.04)' },
-          },
-          y: {
-            ticks: {
-              color: '#5a5a72',
-              font: { size: 10 },
-              callback: v => v >= 10000 ? (v/1000).toFixed(0)+'k' : v.toLocaleString(),
-            },
-            grid: { color: 'rgba(255,255,255,0.04)' },
-            position: 'right',
-          },
-        },
-      },
-    });
   } catch (e) {
-    if (loadingEl) loadingEl.textContent = '資料載入失敗';
-    console.error('Market chart error:', e);
+    if (board) board.innerHTML = '<div style="color:var(--text3);font-size:12px;text-align:center;padding:20px;grid-column:1/-1;">資料載入失敗</div>';
+    console.error('Market live error:', e);
   }
 }
 
-loadMarketChart();
+loadMarketLive();
+// 每 20 秒自動更新（僅首頁顯示時）
+marketLiveTimer = setInterval(() => {
+  if (document.getElementById('marketLiveSection')) loadMarketLive();
+}, 20000);
+
+
