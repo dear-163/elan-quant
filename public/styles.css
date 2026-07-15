@@ -91,6 +91,13 @@ input[type="password"]::placeholder{color:var(--text3);}
 .chart-title-bar{font-size:13px;font-weight:600;color:var(--text2);margin-bottom:10px;}
 .indicator-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(250px,1fr));gap:16px;}
 .ind-card{background:var(--bg2);border:1px solid var(--border);border-radius:var(--radius);padding:16px;}
+/* 首頁6張全市場卡片（ETF排行/三大法人/融資維持率/情緒指數/篩選器/即時報價）共用的排版殼——
+   之前每張卡片各自在HTML inline style裡重複margin-top/置中/display:none，改成父層flex+gap
+   統一間距，卡片本身只留每張真的不同的max-width/text-align。JS只切換display，class的
+   display:none會被inline style.display='block'蓋過，行為不變。*/
+.market-cards-stack{display:flex;flex-direction:column;gap:20px;margin-top:20px;}
+.market-card{margin-left:auto;margin-right:auto;width:100%;}
+.market-card.hide-until-ready{display:none;}
 .ind-title{font-size:13px;font-weight:600;color:var(--text2);margin-bottom:12px;}
 .ind-row{display:flex;justify-content:space-between;align-items:center;padding:6px 0;border-bottom:1px solid var(--border);}
 .ind-row:last-child{border-bottom:none;}

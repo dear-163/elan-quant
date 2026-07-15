@@ -85,7 +85,8 @@
       <span class="ex-tag" onclick="quickLoad('MSFT')">MSFT（微軟）</span>
       <span class="ex-tag" onclick="quickLoad('TSM')">TSM（台積電ADR）</span>
     </div>
-    <div class="active-etf-rankings" id="activeEtfRankings" style="margin-top: 30px; text-align: left; display: none; max-width: 600px; margin-left: auto; margin-right: auto;">
+    <div class="market-cards-stack">
+    <div class="active-etf-rankings market-card hide-until-ready" id="activeEtfRankings" style="text-align: left; max-width: 600px;">
       <div style="font-size: 13px; font-weight: 700; color: var(--text); margin-bottom: 12px; display: flex; justify-content: space-between; align-items: center;">
         <span>🤖 主動式 ETF 今日最愛（經理人加減碼排行）</span>
         <span style="font-size: 10px; font-weight: normal; color: var(--text3);" id="activeEtfRankingsDate"></span>
@@ -101,7 +102,7 @@
         </div>
       </div>
     </div>
-    <div class="market-flow-rankings" id="marketFlowRankings" style="margin-top: 30px; text-align: left; display: none; max-width: 600px; margin-left: auto; margin-right: auto;">
+    <div class="market-flow-rankings market-card hide-until-ready" id="marketFlowRankings" style="text-align: left; max-width: 600px;">
       <div style="font-size: 13px; font-weight: 700; color: var(--text); margin-bottom: 12px; display: flex; justify-content: space-between; align-items: center;">
         <span>🏦 台股大盤三大法人買賣超排行</span>
         <span style="font-size: 10px; font-weight: normal; color: var(--text3);" id="marketFlowRankingsDate"></span>
@@ -117,7 +118,7 @@
         </div>
       </div>
     </div>
-    <div class="margin-ratio-card" id="marginRatioCard" style="margin-top: 20px; text-align: left; display: none; max-width: 600px; margin-left: auto; margin-right: auto;">
+    <div class="margin-ratio-card market-card hide-until-ready" id="marginRatioCard" style="text-align: left; max-width: 600px;">
       <div class="ind-card" style="padding: 14px 16px; background: var(--bg3); display: flex; justify-content: space-between; align-items: center;">
         <div>
           <div style="font-size: 11px; color: var(--text3); font-weight: 700; text-transform: uppercase; margin-bottom: 4px;">💳 台股大盤融資維持率（小於105則強烈買進）</div>
@@ -129,7 +130,7 @@
         <span style="font-size: 10px; color: var(--text3);" id="marginRatioDate"></span>
       </div>
     </div>
-    <div class="homepage-sentiment-card" id="homepageSentimentCard" style="margin-top: 20px; text-align: center; display: none; max-width: 420px; margin-left: auto; margin-right: auto;">
+    <div class="homepage-sentiment-card market-card hide-until-ready" id="homepageSentimentCard" style="text-align: center; max-width: 420px;">
       <div class="ind-card" style="padding: 16px; background: var(--bg3);">
         <div style="font-size: 11px; color: var(--text3); font-weight: 700; text-transform: uppercase; margin-bottom: 6px;">🌡️ 台股情緒指數（自製，方法論參考 CNN Fear &amp; Greed Index）</div>
         <div id="homepageSentimentGauge"></div>
@@ -138,7 +139,7 @@
         <div style="font-size: 10px; color: var(--text3); margin-top: 2px;" id="homepageSentimentDate"></div>
       </div>
     </div>
-    <div class="oversold-volume-screener-card" id="oversoldVolumeScreenerCard" style="margin-top: 20px; text-align: left; display: none; max-width: 600px; margin-left: auto; margin-right: auto;">
+    <div class="oversold-volume-screener-card market-card hide-until-ready" id="oversoldVolumeScreenerCard" style="text-align: left; max-width: 600px;">
       <div style="font-size: 13px; font-weight: 700; color: var(--text); margin-bottom: 12px; display: flex; justify-content: space-between; align-items: center;">
         <span>📉 RSI超賣＋成交量暴增</span>
         <span style="font-size: 10px; font-weight: normal; color: var(--text3);" id="oversoldVolumeScreenerDate"></span>
@@ -147,7 +148,7 @@
         <div id="oversoldVolumeScreenerList" style="display: flex; flex-direction: column; gap: 6px; font-size: 12px;"></div>
       </div>
     </div>
-    <div id="marketLiveSection" style="margin-top:30px; text-align:left; max-width:760px; margin-left:auto; margin-right:auto;">
+    <div id="marketLiveSection" class="market-card" style="text-align:left; max-width:760px;">
       <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px; flex-wrap:wrap; gap:8px;">
         <div style="font-size:13px; font-weight:700; color:var(--text);">📊 大盤即時報價</div>
         <span id="marketLiveTime" style="font-size:10px; color:var(--text3);"></span>
@@ -155,6 +156,7 @@
       <div id="marketLiveBoard" style="display:grid; grid-template-columns:repeat(auto-fit,minmax(140px,1fr)); gap:10px;">
         <div style="text-align:center; padding:20px; color:var(--text3); font-size:12px; grid-column:1/-1;">載入中…</div>
       </div>
+    </div>
     </div>
     <p style="margin-top:24px;font-size:12px;color:var(--text3)">技術數據：Yahoo Finance｜基本面：Google Gemini AI｜僅供參考，不構成投資建議</p>
 
