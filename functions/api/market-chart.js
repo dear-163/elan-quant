@@ -11,41 +11,50 @@ function json(obj, status = 200) {
   });
 }
 
-// TWSE MIS 即時指數
+// TWSE MIS 即時指數。這個端點是設計給瀏覽器保持同一個 session 每5秒連續輪詢用的，Cloudflare
+// Pages Functions 每次呼叫都是全新、無狀態的請求（沒有沿用同一個連線/cookie），實測對它單次
+// 呼叫有明顯的機率性失敗（msgArray 回空陣列，不是HTTP錯誤）——重試一次能顯著降低使用者端看到
+// 「無資料」的機率，不是端點真的掛掉。
+async function fetchTwseIndexOnce(exCh) {
+  const url = `https://mis.twse.com.tw/stock/api/getStockInfo.jsp?ex_ch=${encodeURIComponent(exCh)}&json=1&delay=0&_=${Date.now()}`;
+  const res = await fetch(url, {
+    headers: { 'User-Agent': BROWSER_UA, 'Referer': 'https://mis.twse.com.tw/' },
+  });
+  if (!res.ok) return null;
+  const j = await res.json();
+  const row = j?.msgArray?.[0];
+  if (!row) return null;
+  const current = parseFloat(row.z);
+  const prev = parseFloat(row.y);
+  const open = parseFloat(row.o);
+  const high = parseFloat(row.h);
+  const low = parseFloat(row.l);
+  if (!isFinite(current) || current <= 0) return null;
+  const change = current - prev;
+  const changePct = prev > 0 ? (change / prev * 100) : null;
+  return {
+    name: row.n,
+    current,
+    prev,
+    open,
+    high,
+    low,
+    change,
+    changePct,
+    time: row.t || null,
+    date: row.d || null,
+    volume: row.m ? parseInt(row.m) : null,
+  };
+}
+
 async function fetchTwseIndex(exCh) {
-  try {
-    const url = `https://mis.twse.com.tw/stock/api/getStockInfo.jsp?ex_ch=${encodeURIComponent(exCh)}&json=1&delay=0&_=${Date.now()}`;
-    const res = await fetch(url, {
-      headers: { 'User-Agent': BROWSER_UA, 'Referer': 'https://mis.twse.com.tw/' },
-    });
-    if (!res.ok) return null;
-    const j = await res.json();
-    const row = j?.msgArray?.[0];
-    if (!row) return null;
-    const current = parseFloat(row.z);
-    const prev = parseFloat(row.y);
-    const open = parseFloat(row.o);
-    const high = parseFloat(row.h);
-    const low = parseFloat(row.l);
-    if (!isFinite(current) || current <= 0) return null;
-    const change = current - prev;
-    const changePct = prev > 0 ? (change / prev * 100) : null;
-    return {
-      name: row.n,
-      current,
-      prev,
-      open,
-      high,
-      low,
-      change,
-      changePct,
-      time: row.t || null,
-      date: row.d || null,
-      volume: row.m ? parseInt(row.m) : null,
-    };
-  } catch {
-    return null;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      const result = await fetchTwseIndexOnce(exCh);
+      if (result) return result;
+    } catch {}
   }
+  return null;
 }
 
 // Yahoo Finance chart API for indices (^GSPC, ^IXIC, ^SOX, etc.)
