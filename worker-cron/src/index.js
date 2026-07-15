@@ -18,7 +18,7 @@ function todayDates() {
   const d = String(taipei.getUTCDate()).padStart(2, '0');
   const hh = String(taipei.getUTCHours()).padStart(2, '0');
   const mm = String(taipei.getUTCMinutes()).padStart(2, '0');
-  return { ad: `${y}${m}${d}`, roc: `${y - 1911}${m}${d}`, dash: `${y}-${m}-${d}`, nowHHMM: `${hh}:${mm}` };
+  return { ad: `${y}${m}${d}`, roc: `${y - 1911}${m}${d}`, dash: `${y}-${m}-${d}`, nowHHMM: `${hh}:${mm}`, dow: taipei.getUTCDay() };
 }
 function daysAgoAd(days) {
   const d = new Date(Date.now() - days * 86400000);
@@ -859,7 +859,15 @@ export default {
       console.error('ELAN_QUANT_DB 未綁定，無法執行每日資料累積任務');
       return;
     }
-    const { ad: todayAd, roc: todayRoc, dash: todayDash, nowHHMM } = todayDates();
+    const { ad: todayAd, roc: todayRoc, dash: todayDash, nowHHMM, dow } = todayDates();
+    // 2026-07-12 事故：手動觸發（Cloudflare Dashboard的「Trigger」測試按鈕，或wrangler dev
+    // --test-scheduled沒加--local）會繞過cron排程本身的「只有平日」限制，用當下的真實日期
+    // （可能是週六/週日）把資料寫進正式環境D1。cron trigger本身排程是"0 10 * * 1-5"只會在
+    // 平日觸發，這裡加一層保險：只要算出來的「今天」是週末，就整個直接跳過，什麼都不寫。
+    if (dow === 0 || dow === 6) {
+      console.error(`[cron] 今天（${todayAd}，台北時區）是週末，台股沒有開盤，整個排程本次直接跳過，不寫入任何資料。`);
+      return;
+    }
     const dayData = {
       date: todayAd, taiex_close: null, advancers: null, decliners: null, new_highs: null, new_lows: null,
       margin_balance_total: null, inst_net_buy_count: null, inst_net_sell_count: null,
