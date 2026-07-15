@@ -1814,6 +1814,12 @@ function renderMarketCard(d, shortLabel) {
     </div>`;
 }
 
+// TWSE MIS（台指/櫃買）單次請求本來就有機率性失敗（見 functions/api/market-chart.js 的
+// fetchTwseIndexOnce 註解），每 20 秒輪詢難免偶爾槓龜。如果每次槓龜都把卡片整個清成「無資料」，
+// 使用者盯著畫面時常常會看到指數閃爍消失——比真的抓不到資料更擾民。改成：這次抓不到就沿用
+// 上一次成功抓到的值繼續顯示，不要因為單次失敗就把已經有的資料洗掉。
+let lastGoodMarketData = {};
+
 async function loadMarketLive() {
   const board = document.getElementById('marketLiveBoard');
   const timeEl = document.getElementById('marketLiveTime');
@@ -1822,12 +1828,19 @@ async function loadMarketLive() {
     if (!res.ok) throw new Error('API error');
     const data = await res.json();
 
+    const taiex = data.tw?.taiex || lastGoodMarketData.taiex;
+    const otc = data.tw?.otc || lastGoodMarketData.otc;
+    const spx = data.us?.spx || lastGoodMarketData.spx;
+    const ndx = data.us?.ndx || lastGoodMarketData.ndx;
+    const sox = data.us?.sox || lastGoodMarketData.sox;
+    lastGoodMarketData = { taiex, otc, spx, ndx, sox };
+
     const cards = [
-      renderMarketCard(data.tw?.taiex, '台指 TAIEX'),
-      renderMarketCard(data.tw?.otc, '櫃買 OTC'),
-      renderMarketCard(data.us?.spx, 'S&P 500'),
-      renderMarketCard(data.us?.ndx, 'Nasdaq'),
-      renderMarketCard(data.us?.sox, '費半 SOX'),
+      renderMarketCard(taiex, '台指 TAIEX'),
+      renderMarketCard(otc, '櫃買 OTC'),
+      renderMarketCard(spx, 'S&P 500'),
+      renderMarketCard(ndx, 'Nasdaq'),
+      renderMarketCard(sox, '費半 SOX'),
     ].join('');
 
     if (board) board.innerHTML = cards;
