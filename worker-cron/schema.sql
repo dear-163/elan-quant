@@ -81,3 +81,14 @@ CREATE TABLE IF NOT EXISTS etf_portfolio_value (
   stock_value REAL NOT NULL,      -- 基金持有股票部位的總市值（新台幣）
   PRIMARY KEY (etf_code, date)
 );
+
+-- 每個排程步驟最近一次執行結果，只存單一列（每個step一列，用INSERT OR REPLACE覆蓋），
+-- 不是歷史紀錄表。動機：公債殖利率那個步驟連續252天失敗都沒人發現，因為失敗只會印在
+-- Cloudflare log裡，log沒人即時盯著看就等於不存在。這張表讓人可以隨時用一句SQL查「現在
+-- 哪些步驟是壞的、上次失敗的錯誤訊息是什麼」，不用依賴wrangler tail即時監看。
+CREATE TABLE IF NOT EXISTS cron_diagnostics (
+  step TEXT PRIMARY KEY,          -- 步驟名稱，例如 'bondCurve'、'taiexClose'
+  last_run_at TEXT,               -- 最近一次執行的台北時間日期+HH:MM
+  last_success_at TEXT,           -- 最近一次成功的台北時間日期+HH:MM，成功時才更新
+  last_error TEXT                 -- 最近一次失敗的錯誤訊息，成功時清成NULL
+);

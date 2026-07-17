@@ -33,6 +33,28 @@ function sleep(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
 
+// 把每個排程步驟最近一次的執行結果寫進cron_diagnostics，讓「這個步驟現在是不是壞的」
+// 變成一句SQL就能查，不用依賴wrangler tail即時監看log（公債殖利率那個步驟連續252天
+// 失敗都沒人發現，就是因為失敗訊息只印在log裡，沒人即時盯著）。error傳null代表這次成功。
+async function logStep(db, step, nowHHMM, error) {
+  try {
+    if (error) {
+      await db.prepare(`
+        INSERT INTO cron_diagnostics (step, last_run_at, last_error) VALUES (?, ?, ?)
+        ON CONFLICT(step) DO UPDATE SET last_run_at = excluded.last_run_at, last_error = excluded.last_error
+      `).bind(step, nowHHMM, error).run();
+    } else {
+      await db.prepare(`
+        INSERT INTO cron_diagnostics (step, last_run_at, last_success_at, last_error) VALUES (?, ?, ?, NULL)
+        ON CONFLICT(step) DO UPDATE SET last_run_at = excluded.last_run_at, last_success_at = excluded.last_success_at, last_error = NULL
+      `).bind(step, nowHHMM, nowHHMM).run();
+    }
+  } catch (e) {
+    // 診斷表本身寫失敗不該影響主要排程邏輯，只印log。
+    console.error(`[cron] 寫入cron_diagnostics失敗（step=${step}）：`, e.message);
+  }
+}
+
 async function fetchTaiexClose(rocDate) {
   const res = await fetch('https://openapi.twse.com.tw/v1/indicesReport/MI_5MINS_HIST', { headers: BROWSER_HEADERS });
   if (!res.ok) throw new Error(`MI_5MINS_HIST HTTP ${res.status}`);
@@ -147,7 +169,10 @@ async function fetchVixTwn(todayAd) {
 // 10年期公債殖利率 + 公司債BBB-AAA信用利差——CNN「避險需求」跟「垃圾債券需求」因子的台股
 // 替代資料，同一個 TPEx 端點一次拿到兩個值，不用cookie/登入。
 async function fetchBondCurve() {
-  const res = await fetch('https://www.tpex.org.tw/data/bond/bondCurve.json', { headers: BROWSER_HEADERS });
+  // cache:'no-store' — 這個端點連續252天在正式環境0/252成功、但本機測試每次都成功，
+  // 為了排除「Cloudflare邊緣快取到一次失敗回應、之後一直命中同一個壞掉的快取」這個可能性
+  // （這個URL沒有像其他fetch一樣帶時間戳記做cache-busting），加上明確不快取。
+  const res = await fetch('https://www.tpex.org.tw/data/bond/bondCurve.json', { headers: BROWSER_HEADERS, cache: 'no-store' });
   if (!res.ok) throw new Error(`TPEx bondCurve HTTP ${res.status}`);
   const j = await res.json();
   const govRows = j?.bondCruve?.data;
@@ -890,7 +915,11 @@ export default {
         // 邏輯失準。
         await fetchAndStoreActiveEtfHoldings(db, todayDash);
         console.log('[cron] 主動式 ETF 持股爬蟲執行完成');
-      } catch (e) { console.error('[cron] 主動式 ETF 持股爬蟲失敗：', e.message); }
+        await logStep(db, 'activeEtfHoldings', nowHHMM, null);
+      } catch (e) {
+        console.error('[cron] 主動式 ETF 持股爬蟲失敗：', e.message);
+        await logStep(db, 'activeEtfHoldings', nowHHMM, e.message);
+      }
       return;
     }
 
@@ -904,27 +933,45 @@ export default {
       const raw = await fetchTaiexClose(todayRoc);
       const prev = await fetchPreviousTaiexClose(db, todayAd);
       if (prev != null && Math.abs(raw - prev) / prev > MAX_TAIEX_DAILY_CHANGE_RATIO) {
-        console.error(`[cron] 加權指數收盤價 ${raw} 與前一筆有效值 ${prev} 差異達 ${((Math.abs(raw - prev) / prev) * 100).toFixed(1)}%，超過合理範圍，懷疑來源資料異常（TWSE 端點已知會偶發回傳看似正常但錯誤的資料），本次不採用，當日欄位保留 NULL`);
+        const msg = `加權指數收盤價 ${raw} 與前一筆有效值 ${prev} 差異達 ${((Math.abs(raw - prev) / prev) * 100).toFixed(1)}%，超過合理範圍，懷疑來源資料異常（TWSE 端點已知會偶發回傳看似正常但錯誤的資料），本次不採用，當日欄位保留 NULL`;
+        console.error(`[cron] ${msg}`);
+        await logStep(db, 'taiexClose', nowHHMM, msg);
       } else {
         dayData.taiex_close = raw;
+        await logStep(db, 'taiexClose', nowHHMM, null);
       }
-    } catch (e) { console.error('[cron] 取得加權指數失敗：', e.message); }
+    } catch (e) {
+      console.error('[cron] 取得加權指數失敗：', e.message);
+      await logStep(db, 'taiexClose', nowHHMM, e.message);
+    }
 
     try {
       const ad = await fetchAdvanceDecline();
       dayData.advancers = ad.advancers;
       dayData.decliners = ad.decliners;
-    } catch (e) { console.error('[cron] 取得漲跌家數失敗：', e.message); }
+      await logStep(db, 'advanceDecline', nowHHMM, null);
+    } catch (e) {
+      console.error('[cron] 取得漲跌家數失敗：', e.message);
+      await logStep(db, 'advanceDecline', nowHHMM, e.message);
+    }
 
     try {
       dayData.margin_balance_total = await fetchMarginTotal();
-    } catch (e) { console.error('[cron] 取得全市場融資餘額失敗：', e.message); }
+      await logStep(db, 'marginTotal', nowHHMM, null);
+    } catch (e) {
+      console.error('[cron] 取得全市場融資餘額失敗：', e.message);
+      await logStep(db, 'marginTotal', nowHHMM, e.message);
+    }
 
     try {
       const inst = await fetchInstitutionalCounts(todayAd);
       dayData.inst_net_buy_count = inst.buyCount;
       dayData.inst_net_sell_count = inst.sellCount;
-    } catch (e) { console.error('[cron] 取得三大法人買賣超家數失敗：', e.message); }
+      await logStep(db, 'institutionalCounts', nowHHMM, null);
+    } catch (e) {
+      console.error('[cron] 取得三大法人買賣超家數失敗：', e.message);
+      await logStep(db, 'institutionalCounts', nowHHMM, e.message);
+    }
 
     try {
       const stockRows = await fetchStockDayAll();
@@ -933,26 +980,46 @@ export default {
       const { newHighs, newLows } = await updateStockPricesAndCountNewHighLow(db, todayAd, mergedRows);
       dayData.new_highs = newHighs;
       dayData.new_lows = newLows;
-    } catch (e) { console.error('[cron] 更新個股價格/計算創新高低失敗：', e.message); }
+      await logStep(db, 'stockDayAllNewHighLow', nowHHMM, null);
+    } catch (e) {
+      console.error('[cron] 更新個股價格/計算創新高低失敗：', e.message);
+      await logStep(db, 'stockDayAllNewHighLow', nowHHMM, e.message);
+    }
 
     try {
       const screener = await computeScreenerSignals(db, todayAd);
       console.log(`[cron] RSI超賣/超買+量暴增篩選器：共 ${screener.count} 檔符合（超賣 ${screener.oversoldCount}、超買 ${screener.overboughtCount}）`);
-    } catch (e) { console.error('[cron] 計算RSI超賣/超買+量暴增篩選器失敗：', e.message); }
+      await logStep(db, 'screener', nowHHMM, null);
+    } catch (e) {
+      console.error('[cron] 計算RSI超賣/超買+量暴增篩選器失敗：', e.message);
+      await logStep(db, 'screener', nowHHMM, e.message);
+    }
 
     try {
       dayData.put_call_ratio = await fetchPutCallRatio();
-    } catch (e) { console.error('[cron] 取得臺指選擇權Put/Call比失敗：', e.message); }
+      await logStep(db, 'putCallRatio', nowHHMM, null);
+    } catch (e) {
+      console.error('[cron] 取得臺指選擇權Put/Call比失敗：', e.message);
+      await logStep(db, 'putCallRatio', nowHHMM, e.message);
+    }
 
     try {
       dayData.vixtwn = await fetchVixTwn(todayAd);
-    } catch (e) { console.error('[cron] 取得VIXTWN失敗：', e.message); }
+      await logStep(db, 'vixtwn', nowHHMM, null);
+    } catch (e) {
+      console.error('[cron] 取得VIXTWN失敗：', e.message);
+      await logStep(db, 'vixtwn', nowHHMM, e.message);
+    }
 
     try {
       const bond = await fetchBondCurve();
       dayData.govbond_10y_yield = bond.gov10y;
       dayData.corp_bond_spread = bond.spread;
-    } catch (e) { console.error('[cron] 取得公債殖利率/公司債信用利差失敗：', e.message); }
+      await logStep(db, 'bondCurve', nowHHMM, null);
+    } catch (e) {
+      console.error('[cron] 取得公債殖利率/公司債信用利差失敗：', e.message);
+      await logStep(db, 'bondCurve', nowHHMM, e.message);
+    }
 
     try {
       await db.prepare(`
