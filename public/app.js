@@ -1838,8 +1838,8 @@ function fmtIndex(v, decimals = 2) {
   return v.toLocaleString('zh-TW', { minimumFractionDigits: decimals, maximumFractionDigits: decimals });
 }
 
-function renderMarketCard(d, shortLabel) {
-  if (!d) return `<div class="ind-card" style="padding:12px 14px;background:var(--bg3);opacity:.4;font-size:12px;color:var(--text3);text-align:center;">無資料</div>`;
+function renderMarketCard(d, shortLabel, unavailableNote) {
+  if (!d) return `<div class="ind-card" style="padding:12px 14px;background:var(--bg3);opacity:.6;font-size:11px;color:var(--text3);text-align:center;line-height:1.5;">${escapeHtml(unavailableNote || '無資料')}</div>`;
   const isUp = d.change >= 0;
   const color = isUp ? 'var(--red)' : 'var(--green)';
   const arrow = isUp ? '▲' : '▼';
@@ -1877,9 +1877,13 @@ async function loadMarketLive() {
     const sox = data.us?.sox || lastGoodMarketData.sox;
     lastGoodMarketData = { taiex, otc, spx, ndx, sox };
 
+    // 台指/櫃買的來源（TWSE MIS）對正式環境的對外IP似乎有限制，重試也常常沒用，不是單純
+    // 「這次剛好抓不到」的機率性問題——用比「無資料」更明確的措辭，讓使用者知道這是已知
+    // 限制，不是網站壞掉，也不用一直重新整理期待它自己好。
+    const twUnavailableNote = '台股即時報價暫時無法取得（來源限制，非站台故障）';
     const cards = [
-      renderMarketCard(taiex, '台指 TAIEX'),
-      renderMarketCard(otc, '櫃買 OTC'),
+      renderMarketCard(taiex, '台指 TAIEX', twUnavailableNote),
+      renderMarketCard(otc, '櫃買 OTC', twUnavailableNote),
       renderMarketCard(spx, 'S&P 500'),
       renderMarketCard(ndx, 'Nasdaq'),
       renderMarketCard(sox, '費半 SOX'),
