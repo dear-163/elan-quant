@@ -39,15 +39,22 @@ export async function onRequestGet(context) {
   const { request, env } = context;
   const url = new URL(request.url);
   const symbol = (url.searchParams.get('symbol') || '').trim().toUpperCase();
+  // days：市場全體排行榜（無symbol）支援多日累計視窗（5/10/20日），比較基準從「前一個
+  // 揭露日」換成「N個揭露日之前」，其餘計算邏輯完全不變（都是todayDate跟baselineDate
+  // 兩點式比較，只是baselineDate選得更早）。個股頁（有symbol）故意不開放這個參數，維持
+  // 原本「本日vs前日」的語意，不要讓兩個功能的行為意外耦合在一起。日期是「揭露日」不是
+  // 日曆天——用DISTINCT date數量往回數，自然跳過假日跟資料缺漏的日子，不用另外處理。
+  const days = symbol ? 1 : Math.max(1, Math.min(20, parseInt(url.searchParams.get('days') || '1', 10) || 1));
 
   if (!env.ELAN_QUANT_DB) {
     return json({ error: 'D1 database binding (ELAN_QUANT_DB) not found.' }, 500);
   }
 
   try {
-    // 1. Get the latest two dates available in active_etf_holdings
+    // 1. Get the latest (days+1) dates available in active_etf_holdings
     const dateRows = await env.ELAN_QUANT_DB
-      .prepare('SELECT DISTINCT date FROM active_etf_holdings ORDER BY date DESC LIMIT 2')
+      .prepare('SELECT DISTINCT date FROM active_etf_holdings ORDER BY date DESC LIMIT ?')
+      .bind(days + 1)
       .all();
 
     if (!dateRows.results || dateRows.results.length === 0) {
@@ -55,7 +62,7 @@ export async function onRequestGet(context) {
     }
 
     const todayDate = dateRows.results[0].date;
-    const yesterdayDate = dateRows.results[1] ? dateRows.results[1].date : null;
+    const yesterdayDate = dateRows.results[days] ? dateRows.results[days].date : null;
 
     // "最新兩個日期" 是全表共用的，但個別 ETF 不一定兩個日期都有資料（例如剛換資料來源、
     // 或某天爬蟲失敗）。如果某檔 ETF 昨天完全沒有任何持股紀錄，不能把它今天的每一檔持股都當成
@@ -405,16 +412,19 @@ export async function onRequestGet(context) {
     const marketWidePayload = {
       date: todayDate,
       comparedTo: yesterdayDate,
+      days,
       rankings: { buys, sells }
     };
     // 首頁ETF排行卡片只用這個「無symbol」的市場全體分支，個股查詢（有symbol）先不加快照——
-    // 那邊的回應結構跟這裡不同，範圍留給之後有需要再做。
-    if (!symbol) context.waitUntil(saveSnapshot(env, 'active-etf-flow', marketWidePayload));
+    // 那邊的回應結構跟這裡不同，範圍留給之後有需要再做。快照key要帶days，不然5日視窗
+    // 掛掉時可能退回1日視窗的舊快照，兩種資料語意不同不能混用。
+    const snapshotKey = `active-etf-flow:${days}`;
+    if (!symbol) context.waitUntil(saveSnapshot(env, snapshotKey, marketWidePayload));
     return json(marketWidePayload);
 
   } catch (error) {
     if (!symbol) {
-      const fallback = await loadSnapshotFallback(env, 'active-etf-flow');
+      const fallback = await loadSnapshotFallback(env, `active-etf-flow:${days}`);
       if (fallback) return json(fallback);
     }
     return json({ error: `查詢主動式 ETF 籌碼數據失敗：${error.message}` }, 500);
