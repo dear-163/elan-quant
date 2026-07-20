@@ -1655,17 +1655,39 @@ function staleNoteHtml(date, stale) {
   return `${dateStr} <span style="color:var(--amber);">（資料庫暫時無法連線，顯示上次快照）</span>`;
 }
 
-async function loadActiveEtfRankings() {
+// 切換1/5/10/20日視窗按鈕。5/10/20日視窗需要對應天數的揭露日歷史，資料還沒累積到那麼長
+// 時後端會回傳comparedTo:null，這裡要明確顯示「還沒累積夠」而不是留著上一個視窗的舊資料
+// 沒換掉（那樣使用者會誤以為這個視窗也是這些數字）。
+let activeEtfRankingsDays = 1;
+function setActiveEtfRankingsDays(days, btnEl) {
+  activeEtfRankingsDays = days;
+  document.querySelectorAll('#activeEtfRankingsDaysRow .btn-ghost').forEach(b => b.classList.remove('active'));
+  btnEl.classList.add('active');
+  loadActiveEtfRankings(days);
+}
+
+async function loadActiveEtfRankings(days = 1) {
   try {
-    const res = await fetch('/api/active-etf-flow?t=' + Date.now());
+    const res = await fetch(`/api/active-etf-flow?days=${days}&t=` + Date.now());
     if (!res.ok) return;
     const data = await res.json().catch(() => null);
     if (!data || !data.rankings) return;
-    const { date, rankings } = data;
+    const { date, comparedTo, rankings } = data;
     const buys = rankings.buys || [];
     const sells = rankings.sells || [];
 
-    if (buys.length === 0 && sells.length === 0) return;
+    if (!comparedTo) {
+      // 這個視窗還沒有足夠的揭露日歷史可以比較——首次載入（days===1還沒有資料，跟其他
+      // 首頁小工具一致，先不顯示這格）時保持隱藏；使用者主動切到更長視窗但資料還沒累積夠時，
+      // 明確告知原因，不要留著前一個視窗的數字造成誤會。
+      if (days === 1) return;
+      document.getElementById('activeEtfRankingsDate').innerHTML = staleNoteHtml(date, data.stale);
+      document.getElementById('activeEtfTopBuys').innerHTML = '<div style="color:var(--text3); text-align:center;">資料累積中，還沒有足夠的揭露日歷史可比較</div>';
+      document.getElementById('activeEtfTopSells').innerHTML = '<div style="color:var(--text3); text-align:center;">資料累積中，還沒有足夠的揭露日歷史可比較</div>';
+      document.getElementById('activeEtfRankings').style.display = 'block';
+      return;
+    }
+    if (buys.length === 0 && sells.length === 0 && days === 1) return;
 
     const fmtAmt = v => {
       const abs = Math.abs(v);
@@ -1675,7 +1697,7 @@ async function loadActiveEtfRankings() {
     };
 
     document.getElementById('activeEtfRankingsDate').innerHTML = staleNoteHtml(date, data.stale);
-    
+
     // etfCount：幾檔不同基金「獨立」對這支股票同方向加減碼，跟總金額是不同的訊號（一堆
     // 小基金各自小買，總金額不一定大，但代表操盤共識度高）——只有 >=2 才顯示，1家沒有
     // 「共識」可言，顯示反而是雜訊。
@@ -1686,14 +1708,14 @@ async function loadActiveEtfRankings() {
         <span style="font-weight:600; cursor:pointer; color:var(--text);" onclick="quickLoad('${escapeHtml(b.stock_code)}')">${escapeHtml(b.stock_code)} <span style="font-size:11px;font-weight:normal;color:var(--text3);margin-left:4px;">${escapeHtml(b.stock_name || '')}</span>${countBadge(b.etfCount)}</span>
         <span class="up" style="font-weight:700;">${b.estimated ? '≈' : ''}+${fmtAmt(b.changeAmount)}</span>
       </div>
-    `).join('') || '<div style="color:var(--text3); text-align:center;">今日尚無買超記錄</div>';
+    `).join('') || '<div style="color:var(--text3); text-align:center;">尚無買超記錄</div>';
 
     const sellsHtml = sells.map(s => `
       <div style="display:flex; justify-content:space-between; align-items:center; padding: 4px 0; border-bottom: 1px dashed var(--border);">
         <span style="font-weight:600; cursor:pointer; color:var(--text);" onclick="quickLoad('${escapeHtml(s.stock_code)}')">${escapeHtml(s.stock_code)} <span style="font-size:11px;font-weight:normal;color:var(--text3);margin-left:4px;">${escapeHtml(s.stock_name || '')}</span>${countBadge(s.etfCount)}</span>
         <span class="down" style="font-weight:700;">${s.estimated ? '≈' : ''}${fmtAmt(s.changeAmount)}</span>
       </div>
-    `).join('') || '<div style="color:var(--text3); text-align:center;">今日尚無賣超記錄</div>';
+    `).join('') || '<div style="color:var(--text3); text-align:center;">尚無賣超記錄</div>';
 
     document.getElementById('activeEtfTopBuys').innerHTML = buysHtml;
     document.getElementById('activeEtfTopSells').innerHTML = sellsHtml;

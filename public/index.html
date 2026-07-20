@@ -87,9 +87,15 @@
     </div>
     <div class="market-cards-stack">
     <div class="active-etf-rankings market-card hide-until-ready" id="activeEtfRankings" style="text-align: left; max-width: 600px;">
-      <div style="font-size: 13px; font-weight: 700; color: var(--text); margin-bottom: 12px; display: flex; justify-content: space-between; align-items: center;">
+      <div style="font-size: 13px; font-weight: 700; color: var(--text); margin-bottom: 8px; display: flex; justify-content: space-between; align-items: center;">
         <span>🤖 主動式 ETF 今日最愛（經理人加減碼排行）</span>
         <span style="font-size: 10px; font-weight: normal; color: var(--text3);" id="activeEtfRankingsDate"></span>
+      </div>
+      <div id="activeEtfRankingsDaysRow" style="display: flex; gap: 5px; margin-bottom: 12px;">
+        <button class="btn-ghost active" data-days="1" onclick="setActiveEtfRankingsDays(1,this)" style="font-size: 11px; padding: 4px 10px;">單日</button>
+        <button class="btn-ghost" data-days="5" onclick="setActiveEtfRankingsDays(5,this)" style="font-size: 11px; padding: 4px 10px;">5日</button>
+        <button class="btn-ghost" data-days="10" onclick="setActiveEtfRankingsDays(10,this)" style="font-size: 11px; padding: 4px 10px;">10日</button>
+        <button class="btn-ghost" data-days="20" onclick="setActiveEtfRankingsDays(20,this)" style="font-size: 11px; padding: 4px 10px;">20日</button>
       </div>
       <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px;">
         <div class="ind-card" style="padding: 12px 14px; background: var(--bg3);">
