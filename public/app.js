@@ -1726,6 +1726,33 @@ async function loadActiveEtfRankings(days = 1) {
 }
 loadActiveEtfRankings();
 
+// 訊號勝率是獨立的回測統計（每天前5買超/賣超訊號，5個交易日後回頭驗證漲跌方向），跟上面
+// 排行榜的1/5/10日視窗切換無關，只需要載入一次，不用隨days切換重抓。
+async function loadEtfSignalWinRate() {
+  try {
+    const res = await fetch('/api/etf-signal-winrate?t=' + Date.now());
+    if (!res.ok) return;
+    const data = await res.json().catch(() => null);
+    const el = document.getElementById('activeEtfSignalWinRate');
+    if (!el || !data || data.error) return;
+
+    const { evaluatedCount, winCount, winRate, pendingCount, sufficientSample, forwardTradingDays } = data;
+    if (evaluatedCount === 0 && pendingCount === 0) {
+      el.innerHTML = '';
+      return;
+    }
+    if (evaluatedCount === 0) {
+      el.innerHTML = `📊 訊號勝率追蹤上線中：已記錄 ${pendingCount} 筆訊號，需累積 ${forwardTradingDays} 個交易日才會出現第一筆驗證結果`;
+      return;
+    }
+    const sampleNote = sufficientSample ? '' : `<span style="color:var(--amber);">（樣本數還少，僅供參考）</span>`;
+    el.innerHTML = `📊 過往訊號勝率：<strong style="color:var(--text);">${winRate}%</strong>（${winCount}/${evaluatedCount}筆，買超後漲/賣超後跌算對，${forwardTradingDays}個交易日後驗證）${sampleNote}${pendingCount > 0 ? `，另有 ${pendingCount} 筆等待驗證` : ''}`;
+  } catch (e) {
+    console.error('Failed to load ETF signal win rate:', e);
+  }
+}
+loadEtfSignalWinRate();
+
 // 台股大盤三大法人買賣超排行——跟上面 loadActiveEtfRankings() 是完全不同的資料（TWSE T86
 // 全市場申報，不是主動式 ETF 持股爬蟲），不要合併成同一個函式，避免以後又搞混這兩個「賣超前五名」。
 async function loadMarketFlowRankings() {
