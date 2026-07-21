@@ -91,7 +91,9 @@ export async function onRequestGet(context) {
   try {
     const days = await fetchRecentMarginTradingDays(HISTORY_DAYS);
     if (days.length === 0) {
-      return json({ error: '近期交易日的 TWSE 信用交易統計（融資融券餘額）皆無法取得有效資料，請稍後再試' }, 502);
+      // 丟例外而不是直接return——這樣才會進到下面catch區塊試KV快照回退，不然TWSE
+      // 這端點暫時失敗時，卡片會直接消失、沒有任何錯誤訊息（跟market-flow.js同一類bug）。
+      throw new Error('近期交易日的 TWSE 信用交易統計（融資融券餘額）皆無法取得有效資料，請稍後再試');
     }
 
     const latest = days[0];

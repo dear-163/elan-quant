@@ -63,7 +63,10 @@ export async function onRequestGet(context) {
   try {
     const found = await fetchLatestT86All();
     if (!found) {
-      return json({ error: '近期交易日的 TWSE T86（三大法人買賣超）皆無法取得有效資料，請稍後再試' }, 502);
+      // 丟例外而不是直接return——這樣才會進到下面catch區塊試KV快照回退，不然TWSE
+      // 這端點暫時失敗時，使用者會看到卡片直接消失、沒有任何錯誤訊息（2026-07-21發現的
+      // 案例：這個early return完全繞過了snapshot fallback邏輯）。
+      throw new Error('近期交易日的 TWSE T86（三大法人買賣超）皆無法取得有效資料，請稍後再試');
     }
     const { body, adDate } = found;
 
@@ -71,7 +74,7 @@ export async function onRequestGet(context) {
     const nameIdx = body.fields.indexOf('證券名稱');
     const netIdx = body.fields.indexOf('三大法人買賣超股數');
     if ([codeIdx, nameIdx, netIdx].some(i => i === -1)) {
-      return json({ error: `TWSE T86 欄位與預期不符，實際欄位：${body.fields.join('、')}` }, 502);
+      throw new Error(`TWSE T86 欄位與預期不符，實際欄位：${body.fields.join('、')}`);
     }
 
     const priceRows = await env.ELAN_QUANT_DB
