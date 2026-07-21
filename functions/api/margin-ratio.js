@@ -62,6 +62,33 @@ function computeUsageRatio(body) {
   };
 }
 
+// 使用率（餘額÷限額）的分母是監理限額，加總起來遠大於實際餘額規模（限額約2.5億張，
+// 餘額長年只有6~9百萬張），導致比例結構性地卡在3%~4%這個窄幅區間，不管市場實際上是熱
+// 是冷都看不太出差異——單看這個%數字沒有「現在算高還是低」的參照點。worker-cron每天
+// 已經把全市場融資餘額（不同來源：openapi.twse.com.tw，跟這裡即時抓的rwd端點數值會有
+// 些微落差但同樣量級，足夠拿來排百分位）存進D1 daily_market_data.margin_balance_total
+// 超過一年，改用「今天餘額在近252個交易日的百分位」當輔助指標，才回答得出「熱不熱」。
+const PERCENTILE_MIN_HISTORY = 60; // 沿用sentiment.js同樣的「資料不足60筆先不判讀」門檻
+const PERCENTILE_WINDOW = 252;
+
+async function fetchMarginBalancePercentile(env, todayBalance) {
+  if (!env.ELAN_QUANT_DB) return null;
+  try {
+    const rows = await env.ELAN_QUANT_DB
+      .prepare('SELECT margin_balance_total FROM daily_market_data WHERE margin_balance_total IS NOT NULL ORDER BY date DESC LIMIT ?')
+      .bind(PERCENTILE_WINDOW)
+      .all();
+    const history = (rows.results || []).map(r => r.margin_balance_total).filter(v => v != null);
+    if (history.length < PERCENTILE_MIN_HISTORY) {
+      return { percentile: null, historyDays: history.length };
+    }
+    const below = history.filter(v => v <= todayBalance).length;
+    return { percentile: Math.round((below / history.length) * 100), historyDays: history.length };
+  } catch {
+    return null; // 百分位只是輔助資訊，D1查詢失敗不該讓整個使用率API跟著掛掉
+  }
+}
+
 // TWSE這個端點本身就支援指定歷史日期查詢（date=YYYYMMDD），不需要另外存D1累積歷史——
 // 跟原本「只抓最新一天，往回找到有效資料為止」是同一種寫法，差別只在於找滿N天才停，不是
 // 找到1天就停。掃描上限抓寬一點（連假很少連續超過一週）。
@@ -97,6 +124,7 @@ export async function onRequestGet(context) {
     }
 
     const latest = days[0];
+    const percentileInfo = await fetchMarginBalancePercentile(env, latest.totalBalance);
     const result = {
       date: latest.date,
       source: 'TWSE 信用交易統計（融資融券餘額，個股明細加總）',
@@ -106,6 +134,8 @@ export async function onRequestGet(context) {
       matchedStocks: latest.matchedStocks,
       // 舊到新排序，方便前端直接畫成由左到右的比較列
       history: days.slice().reverse().map(d => ({ date: d.date, ratio: d.ratio })),
+      balancePercentile: percentileInfo?.percentile ?? null,
+      balancePercentileHistoryDays: percentileInfo?.historyDays ?? null,
     };
     context.waitUntil(saveSnapshot(env, 'margin-ratio', result));
     return json(result);

@@ -1810,6 +1810,20 @@ async function loadMarginRatio() {
     document.getElementById('marginRatioDate').innerHTML = staleNoteHtml(data.date, data.stale);
     document.getElementById('marginRatioCard').style.display = 'block';
 
+    // 使用率的分母是監理限額（遠大於實際餘額規模），比例結構性地卡在3~4%窄幅區間，單看
+    // %數字看不出「現在算高還是低」。輔以「今日融資餘額在近N個交易日的百分位」才回答得出
+    // 熱不熱——data不足60筆時後端會回傳percentile:null，此時不顯示這行，不用假數字充數。
+    const pctEl = document.getElementById('marginRatioPercentile');
+    if (pctEl) {
+      if (data.balancePercentile == null) {
+        pctEl.textContent = '';
+      } else {
+        const p = data.balancePercentile;
+        const label = p >= 80 ? '偏高' : p <= 20 ? '偏低' : '中性';
+        pctEl.textContent = `融資餘額歷史百分位：${p}%（近${data.balancePercentileHistoryDays}個交易日，${label}）`;
+      }
+    }
+
     // 過去幾天的比較列：跟前一天比的漲跌箭頭，單一數字看不出散戶槓桿熱度是持續升溫還是降溫。
     // history不足2筆（例如遇到連假只抓到1天）就不顯示比較列，只顯示今天的數字。
     const histEl = document.getElementById('marginRatioHistory');
