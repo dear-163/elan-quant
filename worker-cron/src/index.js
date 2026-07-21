@@ -1058,11 +1058,13 @@ export default {
       return;
     }
 
-    // 主動式ETF持股爬蟲獨立成第二個cron trigger（10:05 UTC，見wrangler.toml），跟下面
-    // 一長串步驟分開跑、各自有自己完整的執行時間預算，不用跟前面的步驟搶。event.cron
-    // 用來分辨這次是哪一個排程觸發的；本機wrangler dev --test-scheduled不帶--cron參數時
-    // event.cron會是空字串，這裡當成主排程處理，方便本機測試不用額外指定。
-    if (event.cron === '5 10 * * 1-5') {
+    // 主動式ETF持股爬蟲獨立成第二個cron trigger（13:00 UTC = 21:00台北，見wrangler.toml），
+    // 跟下面一長串步驟分開跑、各自有自己完整的執行時間預算，不用跟前面的步驟搶；時間點
+    // 也刻意晚於主排程（2026-07-21發現多數發行公司的當日持股要收盤後好幾小時才公布，
+    // 原本18:05太早，見wrangler.toml註解）。event.cron用來分辨這次是哪一個排程觸發的；
+    // 本機wrangler dev --test-scheduled不帶--cron參數時event.cron會是空字串，這裡當成
+    // 主排程處理，方便本機測試不用額外指定。
+    if (event.cron === '0 13 * * 1-5') {
       try {
         // active_etf_holdings.date 統一用 YYYY-MM-DD（跟 scripts/sync_active_etfs.js 手動同步
         // 腳本一致）——這裡故意不用 todayAd（YYYYMMDD，其他表用的格式），避免同一張表混入
