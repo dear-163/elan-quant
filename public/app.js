@@ -55,6 +55,20 @@ function setCandleInterval(iv,btn){
 }
 function quickLoad(sym){document.getElementById('symbolInput').value=sym;analyze();}
 
+// 點左上角「le cap」回首頁：bump analyzeGeneration是為了讓還沒回來的analyze()請求作廢，
+// 不然使用者按回首頁後，前一支股票的分析結果才姍姍來遲把畫面又蓋回去。
+function goHome(){
+  analyzeGeneration++;
+  currentSymbol='';
+  document.getElementById('symbolInput').value='';
+  document.getElementById('welcomeBox').classList.remove('hidden');
+  document.getElementById('tabBar').classList.add('hidden');
+  document.getElementById('loadingBox').classList.add('hidden');
+  document.getElementById('errorBox').classList.add('hidden');
+  document.getElementById('analyzeBtn').disabled=false;
+  window.scrollTo({top:0,behavior:'smooth'});
+}
+
 async function analyze(){
   const sym=document.getElementById('symbolInput').value.trim().toUpperCase();
   if(!sym)return;
