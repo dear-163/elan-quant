@@ -121,7 +121,15 @@ export async function onRequestGet(context) {
       }
     }
   } catch (e) {
-    insider = { error: `SEC EDGAR 請求發生例外：${e.message}` };
+    // SEC EDGAR (Akamai前端) 對於429/403會回傳「Request Rate Threshold Exceeded」——實測發現
+    // 就算完全遵守SEC官方要求的User-Agent格式、且本站對這個端點有24小時快取（正常情況下
+    // 請求量極低），仍會持續被擋。研判是Cloudflare大量網站共用的出口IP整體流量觸發了SEC那邊
+    // 的存取限制，不是本站自己請求過量——跟本session先前遇到的TWSE MIS/TPEx公債殖利率
+    // 同一類「來源端對雲端平台IP的限制」，程式碼層面無法修復，只能誠實告知原因。
+    const blocked = /HTTP (403|429|503)/.test(e.message);
+    insider = blocked
+      ? { error: 'SEC EDGAR 目前暫時無法取用（美國證管會網站對雲端平台共用IP的存取有限制，並非本站故障，之後可能自行恢復，建議稍後再試）' }
+      : { error: `SEC EDGAR 請求發生例外：${e.message}` };
   }
 
   const gotRealData = !insider.error;
