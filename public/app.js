@@ -1831,14 +1831,18 @@ async function loadMarginRatio() {
     // 一年多幾乎單調上升，直接排「原始水位」的百分位會失真（只反映餘額還在漲，不是今天
     // 特別熱），後端已改成排「今天 ÷ 近20日均值」這個去趨勢化比值的百分位，濾掉長期趨勢
     // 只看短期偏離。data不足時後端會回傳percentile:null，此時不顯示這行，不用假數字充數。
+    // 原本一行塞了「偏離近月均值百分位：3%（近212個交易日，偏低）」這種統計術語堆疊，
+    // 一般人看不懂在講什麼——改成先講白話結論，統計細節（百分位、樣本天數）收進滑鼠
+    // hover的title提示，不佔版面也不會一開始就把人嚇跑。
     const pctEl = document.getElementById('marginRatioPercentile');
     if (pctEl) {
       if (data.balancePercentile == null) {
         pctEl.textContent = '';
       } else {
         const p = data.balancePercentile;
-        const label = p >= 80 ? '偏高' : p <= 20 ? '偏低' : '中性';
-        pctEl.textContent = `融資餘額偏離近月均值百分位：${p}%（近${data.balancePercentileHistoryDays}個交易日，${label}）`;
+        const label = p >= 80 ? '偏高（近期升溫）' : p <= 20 ? '偏低（近期降溫）' : '中性';
+        const detail = `今日融資餘額相對近1個月平均水準的位置，排在近${data.balancePercentileHistoryDays}個交易日的第${p}百分位（數字越高代表比平常更熱）`;
+        pctEl.innerHTML = `槓桿熱度：<strong style="color:var(--text);">${label}</strong> <span style="cursor:help; color:var(--text3);" title="${escapeHtml(detail)}">ⓘ</span>`;
       }
     }
 
