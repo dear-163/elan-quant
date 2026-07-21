@@ -1826,6 +1826,16 @@ async function loadMarginRatio() {
     document.getElementById('marginRatioDate').innerHTML = staleNoteHtml(data.date, data.stale);
     document.getElementById('marginRatioCard').style.display = 'block';
 
+    // %數字跟百分位都是「相對」量尺，使用者反應還是不知道「現在到底有多少融資量」這個
+    // 絕對數字——totalBalance其實API本來就有回傳（TWSE官方單位就是「張」，即1000股），
+    // 只是前端一直沒有顯示出來。故意不換算成「億元」金額：那需要逐檔股價相乘加總，這支
+    // 端點沒有查股價（設計上刻意不依賴D1/股價，見檔案開頭註解），沒有真實股價就不編一個
+    // 換算金額出來，直接顯示官方原始單位「張」最誠實。
+    const balEl = document.getElementById('marginRatioBalance');
+    if (balEl && data.totalBalance != null) {
+      balEl.textContent = `全市場融資餘額：${(data.totalBalance / 10000).toFixed(1)} 萬張`;
+    }
+
     // 使用率的分母是監理限額（遠大於實際餘額規模），比例結構性地卡在3~4%窄幅區間，單看
     // %數字看不出「現在算高還是低」。輔以百分位才回答得出熱不熱——但融資餘額本身過去
     // 一年多幾乎單調上升，直接排「原始水位」的百分位會失真（只反映餘額還在漲，不是今天
