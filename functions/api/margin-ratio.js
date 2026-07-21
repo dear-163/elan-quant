@@ -67,23 +67,44 @@ function computeUsageRatio(body) {
 // 是冷都看不太出差異——單看這個%數字沒有「現在算高還是低」的參照點。worker-cron每天
 // 已經把全市場融資餘額（不同來源：openapi.twse.com.tw，跟這裡即時抓的rwd端點數值會有
 // 些微落差但同樣量級，足夠拿來排百分位）存進D1 daily_market_data.margin_balance_total
-// 超過一年，改用「今天餘額在近252個交易日的百分位」當輔助指標，才回答得出「熱不熱」。
-const PERCENTILE_MIN_HISTORY = 60; // 沿用sentiment.js同樣的「資料不足60筆先不判讀」門檻
+// 超過一年。
+//
+// 一開始直接拿「餘額原始水位」排252個交易日的百分位，但實測發現融資餘額過去14個月幾乎
+// 單調上升（2025-06月均677萬張 → 2026-07月均953萬張，沒有明顯回落），這種長期趨勢會讓
+// 原始水位百分位失真——只要餘額還在漲，最近的日子幾乎必然落在歷史高百分位，這只是反映
+// 「餘額還在漲」，不是「今天散戶特別衝動」，拿這個當「熱不熱」的判斷基準並不公正。
+// 改成「今天餘額 ÷ 近TREND_MA_WINDOW個交易日移動平均」這個比值去排百分位——先用移動
+// 平均把長期趨勢濾掉，只留下「今天偏離自己近期正常水準多少」，才是真正回答「現在算不算
+// 異常熱」的公平算法（historical序列的每一天也用同樣的「該天÷該天之前MA_WINDOW天均值」
+// 算法，才是同一把尺互相比較，不是拿去趨勢化的今天比未去趨勢化的歷史）。
+const PERCENTILE_MIN_HISTORY = 60; // 去趨勢化後的比值序列至少要有60筆才顯示百分位（沿用sentiment.js同樣的門檻）
 const PERCENTILE_WINDOW = 252;
+const TREND_MA_WINDOW = 20; // 近20個交易日（約1個月）移動平均，當作「近期正常水準」基準
 
 async function fetchMarginBalancePercentile(env, todayBalance) {
   if (!env.ELAN_QUANT_DB) return null;
   try {
     const rows = await env.ELAN_QUANT_DB
       .prepare('SELECT margin_balance_total FROM daily_market_data WHERE margin_balance_total IS NOT NULL ORDER BY date DESC LIMIT ?')
-      .bind(PERCENTILE_WINDOW)
+      .bind(PERCENTILE_WINDOW + TREND_MA_WINDOW)
       .all();
-    const history = (rows.results || []).map(r => r.margin_balance_total).filter(v => v != null);
-    if (history.length < PERCENTILE_MIN_HISTORY) {
-      return { percentile: null, historyDays: history.length };
+    // D1回傳新到舊，反轉成舊到新方便往前算移動平均
+    const balances = (rows.results || []).map(r => r.margin_balance_total).filter(v => v != null).reverse();
+    if (balances.length < TREND_MA_WINDOW + PERCENTILE_MIN_HISTORY) {
+      return { percentile: null, historyDays: Math.max(0, balances.length - TREND_MA_WINDOW) };
     }
-    const below = history.filter(v => v <= todayBalance).length;
-    return { percentile: Math.round((below / history.length) * 100), historyDays: history.length };
+
+    const ratios = [];
+    for (let i = TREND_MA_WINDOW; i < balances.length; i++) {
+      const ma = balances.slice(i - TREND_MA_WINDOW, i).reduce((s, v) => s + v, 0) / TREND_MA_WINDOW;
+      ratios.push(balances[i] / ma);
+    }
+
+    const todayMa = balances.slice(-TREND_MA_WINDOW).reduce((s, v) => s + v, 0) / TREND_MA_WINDOW;
+    const todayRatio = todayBalance / todayMa;
+
+    const below = ratios.filter(r => r <= todayRatio).length;
+    return { percentile: Math.round((below / ratios.length) * 100), historyDays: ratios.length };
   } catch {
     return null; // 百分位只是輔助資訊，D1查詢失敗不該讓整個使用率API跟著掛掉
   }

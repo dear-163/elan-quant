@@ -1825,8 +1825,10 @@ async function loadMarginRatio() {
     document.getElementById('marginRatioCard').style.display = 'block';
 
     // 使用率的分母是監理限額（遠大於實際餘額規模），比例結構性地卡在3~4%窄幅區間，單看
-    // %數字看不出「現在算高還是低」。輔以「今日融資餘額在近N個交易日的百分位」才回答得出
-    // 熱不熱——data不足60筆時後端會回傳percentile:null，此時不顯示這行，不用假數字充數。
+    // %數字看不出「現在算高還是低」。輔以百分位才回答得出熱不熱——但融資餘額本身過去
+    // 一年多幾乎單調上升，直接排「原始水位」的百分位會失真（只反映餘額還在漲，不是今天
+    // 特別熱），後端已改成排「今天 ÷ 近20日均值」這個去趨勢化比值的百分位，濾掉長期趨勢
+    // 只看短期偏離。data不足時後端會回傳percentile:null，此時不顯示這行，不用假數字充數。
     const pctEl = document.getElementById('marginRatioPercentile');
     if (pctEl) {
       if (data.balancePercentile == null) {
@@ -1834,7 +1836,7 @@ async function loadMarginRatio() {
       } else {
         const p = data.balancePercentile;
         const label = p >= 80 ? '偏高' : p <= 20 ? '偏低' : '中性';
-        pctEl.textContent = `融資餘額歷史百分位：${p}%（近${data.balancePercentileHistoryDays}個交易日，${label}）`;
+        pctEl.textContent = `融資餘額偏離近月均值百分位：${p}%（近${data.balancePercentileHistoryDays}個交易日，${label}）`;
       }
     }
 
