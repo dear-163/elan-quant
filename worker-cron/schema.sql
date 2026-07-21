@@ -92,3 +92,20 @@ CREATE TABLE IF NOT EXISTS cron_diagnostics (
   last_success_at TEXT,           -- 最近一次成功的台北時間日期+HH:MM，成功時才更新
   last_error TEXT                 -- 最近一次失敗的錯誤訊息，成功時清成NULL
 );
+
+-- 每天把ETF加碼/減碼排行前5買超+前5賣超記錄下來，之後回頭檢查這些訊號後續5個交易日
+-- 股價表現，算出「勝率」（買超後漲/賣超後跌算贏）。只用有真實股數的持股算訊號（不含只
+-- 揭露權重的發行公司，例如國泰），避免權重估算誤差污染回測結果——這是跟即時排行榜
+-- （functions/api/active-etf-flow.js）故意不同的簡化版，即時榜為了呈現完整才納入權重
+-- 估算，這裡為了回測準確度寧可少一點訊號來源。
+CREATE TABLE IF NOT EXISTS etf_signal_outcomes (
+  signal_date TEXT NOT NULL,      -- 訊號產生的揭露日（YYYY-MM-DD）
+  stock_code TEXT NOT NULL,
+  stock_name TEXT,
+  action TEXT NOT NULL,           -- '買超' 或 '賣超'
+  signal_price REAL,              -- 訊號當天收盤價
+  outcome_price REAL,             -- 訊號後第5個交易日收盤價，還沒到就是NULL
+  outcome_date TEXT,              -- 對應的日期
+  win INTEGER,                    -- 1=方向正確（買超後漲/賣超後跌）、0=方向錯誤、NULL=還沒評估
+  PRIMARY KEY (signal_date, stock_code)
+);

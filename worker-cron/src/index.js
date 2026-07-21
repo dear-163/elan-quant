@@ -913,6 +913,112 @@ async function fetchAndStoreActiveEtfHoldings(db, todayDash) {
   console.log(`[cron-etf] 本次執行完畢：${etfs.length - failedCodes.length}/${etfs.length} 檔成功，失敗：${failedCodes.length ? failedCodes.join('、') : '無'}`);
 }
 
+// 每天把ETF加碼/減碼排行前5買超+前5賣超記錄下來，之後回頭檢查這些訊號5個交易日後股價
+// 表現算勝率。故意只用「有真實股數」的持股算訊號（跳過只揭露權重的發行公司，例如國泰），
+// 跟即時排行榜（functions/api/active-etf-flow.js）不同——那邊為了呈現完整才納入權重
+// 估算，這裡為了回測準確度寧可少一點訊號來源，不要讓估算誤差污染歷史勝率統計。
+const ETF_SIGNAL_FORWARD_TRADING_DAYS = 5;
+
+// active_etf_holdings.date 是 YYYY-MM-DD，stock_daily_price.date 是 YYYYMMDD（跟其他表
+// 一致用todayAd格式）——這個函式要同時查兩張表，每次查stock_daily_price前都要轉換格式，
+// 不能直接共用同一個日期字串（這正是這個檔案別處已經寫過的「同一張表混入兩種日期格式」
+// 那類bug，這裡是「兩張表用不同格式」，同樣容易搞混，要小心）。
+function adFromDash(dash) {
+  return dash.replace(/-/g, '');
+}
+
+async function recordEtfSignalsAndEvaluateOutcomes(db, todayDash) {
+  const dateRows = await db.prepare('SELECT DISTINCT date FROM active_etf_holdings ORDER BY date DESC LIMIT 2').all();
+  const dates = (dateRows.results || []).map(r => r.date);
+  let recorded = 0;
+
+  if (dates.length === 2 && dates[0] === todayDash) {
+    const [today, yesterday] = dates;
+    const todayAdFmt = adFromDash(today);
+    const { results: rows } = await db
+      .prepare('SELECT etf_code, stock_code, shares, date FROM active_etf_holdings WHERE date IN (?, ?) AND shares IS NOT NULL')
+      .bind(today, yesterday)
+      .all();
+
+    const byPair = new Map();
+    for (const r of (rows || [])) {
+      const key = r.etf_code + '|' + r.stock_code;
+      if (!byPair.has(key)) byPair.set(key, {});
+      byPair.get(key)[r.date === today ? 't' : 'y'] = r.shares;
+    }
+
+    const { results: priceRows } = await db
+      .prepare(`
+        SELECT p.code, p.close FROM stock_daily_price p
+        INNER JOIN (SELECT code, MAX(date) as max_date FROM stock_daily_price WHERE date <= ? GROUP BY code) m
+          ON p.code = m.code AND p.date = m.max_date
+      `)
+      .bind(todayAdFmt)
+      .all();
+    const priceMap = new Map((priceRows || []).map(p => [p.code, p.close]));
+
+    const stockAgg = new Map();
+    for (const [key, v] of byPair) {
+      const stockCode = key.split('|')[1];
+      const changeShares = (v.t ?? 0) - (v.y ?? 0);
+      if (changeShares === 0) continue;
+      const price = priceMap.get(stockCode);
+      if (price == null) continue;
+      stockAgg.set(stockCode, (stockAgg.get(stockCode) || 0) + changeShares * price);
+    }
+
+    const entries = [...stockAgg.entries()].map(([stock_code, changeAmount]) => ({ stock_code, changeAmount }));
+    const buys = entries.filter(e => e.changeAmount > 0).sort((a, b) => b.changeAmount - a.changeAmount).slice(0, 5);
+    const sells = entries.filter(e => e.changeAmount < 0).sort((a, b) => a.changeAmount - b.changeAmount).slice(0, 5);
+
+    const { results: nameRows } = await db.prepare('SELECT code, name FROM stock_daily_price WHERE date = ?').bind(todayAdFmt).all();
+    const nameMap = new Map((nameRows || []).map(r => [r.code, r.name]));
+
+    const statements = [];
+    for (const e of [...buys.map(b => ({ ...b, action: '買超' })), ...sells.map(s => ({ ...s, action: '賣超' }))]) {
+      const price = priceMap.get(e.stock_code);
+      if (price == null) continue;
+      statements.push(
+        db.prepare('INSERT OR REPLACE INTO etf_signal_outcomes (signal_date, stock_code, stock_name, action, signal_price) VALUES (?, ?, ?, ?, ?)')
+          .bind(today, e.stock_code, nameMap.get(e.stock_code) || e.stock_code, e.action, price)
+      );
+      recorded++;
+    }
+    if (statements.length) await batchRun(db, statements);
+  }
+
+  // 回頭評估「還沒判定勝負」的舊訊號：訊號日之後至少過了5個交易日，才去查那一天的收盤價。
+  // signal_date存的是YYYY-MM-DD（跟其他active_etf_holdings衍生欄位一致），要轉成YYYYMMDD
+  // 才能拿去比對stock_daily_price的日期清單。
+  const { results: pending } = await db.prepare('SELECT signal_date, stock_code, action, signal_price FROM etf_signal_outcomes WHERE win IS NULL').all();
+  let evaluated = 0;
+  if (pending && pending.length) {
+    const { results: allDates } = await db.prepare('SELECT DISTINCT date FROM stock_daily_price ORDER BY date DESC LIMIT 60').all();
+    const distinctDatesDesc = (allDates || []).map(r => r.date);
+    const evalStatements = [];
+    for (const sig of pending) {
+      const signalAd = adFromDash(sig.signal_date);
+      const idx = distinctDatesDesc.indexOf(signalAd);
+      if (idx === -1 || idx < ETF_SIGNAL_FORWARD_TRADING_DAYS) continue; // 還沒過5個交易日，或訊號太久遠不在60天視窗內
+      const outcomeDateAd = distinctDatesDesc[idx - ETF_SIGNAL_FORWARD_TRADING_DAYS];
+      const priceRow = await db.prepare('SELECT close FROM stock_daily_price WHERE code = ? AND date = ?').bind(sig.stock_code, outcomeDateAd).first();
+      if (!priceRow || priceRow.close == null) continue;
+      const win = sig.action === '買超' ? (priceRow.close > sig.signal_price ? 1 : 0) : (priceRow.close < sig.signal_price ? 1 : 0);
+      // outcome_date存回跟signal_date一致的YYYY-MM-DD格式（isoFromAd是這個檔案裡沒有的
+      // 工具函式，這裡直接手刻轉換，避免額外引入依賴）。
+      const outcomeDateDash = `${outcomeDateAd.slice(0, 4)}-${outcomeDateAd.slice(4, 6)}-${outcomeDateAd.slice(6, 8)}`;
+      evalStatements.push(
+        db.prepare('UPDATE etf_signal_outcomes SET outcome_price = ?, outcome_date = ?, win = ? WHERE signal_date = ? AND stock_code = ?')
+          .bind(priceRow.close, outcomeDateDash, win, sig.signal_date, sig.stock_code)
+      );
+      evaluated++;
+    }
+    if (evalStatements.length) await batchRun(db, evalStatements);
+  }
+
+  return { recorded, evaluated };
+}
+
 export default {
   async scheduled(event, env, ctx) {
     const db = env.ELAN_QUANT_DB;
@@ -946,6 +1052,15 @@ export default {
       } catch (e) {
         console.error('[cron] 主動式 ETF 持股爬蟲失敗：', e.message);
         await logStep(db, 'activeEtfHoldings', nowHHMM, e.message);
+      }
+
+      try {
+        const outcome = await recordEtfSignalsAndEvaluateOutcomes(db, todayDash);
+        console.log(`[cron] ETF訊號勝率追蹤：新增 ${outcome.recorded} 筆訊號、評估 ${outcome.evaluated} 筆結果`);
+        await logStep(db, 'etfSignalOutcomes', nowHHMM, null);
+      } catch (e) {
+        console.error('[cron] ETF訊號勝率追蹤失敗：', e.message);
+        await logStep(db, 'etfSignalOutcomes', nowHHMM, e.message);
       }
       return;
     }
