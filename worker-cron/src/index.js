@@ -212,6 +212,52 @@ async function fetchCreditRiskAppetiteRatio() {
   return hyg / lqd;
 }
 
+// 2026-07-23：這兩個美股資料源2026-07-21才剛換上（見上面大段註解），sentiment.js的
+// govBondYieldChangeSeries算的是「5個交易日變化量」，需要今天+5天前都有真實值才能算出
+// 第一個數字——只累積1天的話要再等將近一週才會有第一筆。但Yahoo Finance的chart API本身
+// 支援查歷史區間（不是只有最新一天），一次呼叫就能拿回過去3個月的每日收盤，直接拿來
+// 回補daily_market_data既有列缺漏的欄位，比每天累積1筆快很多，不用乾等一週。
+async function fetchYahooHistoricalCloses(symbol, range) {
+  const res = await fetch(`https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(symbol)}?range=${range}&interval=1d`, { headers: { 'Accept': 'application/json', 'User-Agent': YAHOO_UA } });
+  if (!res.ok) throw new Error(`Yahoo ${symbol} 歷史資料 HTTP ${res.status}`);
+  const j = await res.json();
+  const r = j?.chart?.result?.[0];
+  if (!r) throw new Error(`Yahoo ${symbol} 歷史資料回應找不到chart.result`);
+  const timestamps = r.timestamp || [];
+  const closes = r.indicators?.quote?.[0]?.close || [];
+  const out = [];
+  for (let i = 0; i < timestamps.length; i++) {
+    if (closes[i] == null) continue;
+    const d = new Date(timestamps[i] * 1000);
+    const dateAd = `${d.getUTCFullYear()}${String(d.getUTCMonth() + 1).padStart(2, '0')}${String(d.getUTCDate()).padStart(2, '0')}`;
+    out.push({ dateAd, close: closes[i] });
+  }
+  return out; // 舊到新排序
+}
+
+async function backfillUsBondIndicators(db) {
+  const [tnxHistory, hygHistory, lqdHistory] = await Promise.all([
+    fetchYahooHistoricalCloses('^TNX', '3mo'),
+    fetchYahooHistoricalCloses('HYG', '3mo'),
+    fetchYahooHistoricalCloses('LQD', '3mo'),
+  ]);
+
+  const statements = [];
+  for (const { dateAd, close } of tnxHistory) {
+    statements.push(db.prepare('UPDATE daily_market_data SET govbond_10y_yield = ? WHERE date = ? AND govbond_10y_yield IS NULL').bind(close, dateAd));
+  }
+
+  const lqdMap = new Map(lqdHistory.map(h => [h.dateAd, h.close]));
+  for (const { dateAd, close: hyg } of hygHistory) {
+    const lqd = lqdMap.get(dateAd);
+    if (lqd == null) continue;
+    statements.push(db.prepare('UPDATE daily_market_data SET corp_bond_spread = ? WHERE date = ? AND corp_bond_spread IS NULL').bind(hyg / lqd, dateAd));
+  }
+
+  if (statements.length) await batchRun(db, statements);
+  return { tnxDays: tnxHistory.length, ratioDays: hygHistory.filter(h => lqdMap.has(h.dateAd)).length };
+}
+
 async function fetchStockDayAll() {
   const res = await fetch('https://openapi.twse.com.tw/v1/exchangeReport/STOCK_DAY_ALL', { headers: BROWSER_HEADERS });
   if (!res.ok) throw new Error(`STOCK_DAY_ALL HTTP ${res.status}`);
@@ -1228,6 +1274,20 @@ export default {
         } catch (e) {
           console.error('[cron] 取得HYG/LQD信用風險偏好比值失敗：', e.message);
           await logStep(db, 'creditRiskAppetiteRatio', nowHHMM, e.message);
+        }
+      })(),
+
+      // 只需要在這兩個美股指標還沒累積滿5天真實資料時跑一次就夠（回補的是「歷史缺漏」，
+      // 不是每天都要重跑），但重複執行也無害——UPDATE...WHERE...IS NULL本來就是冪等的，
+      // 已經有值的日期不會被覆蓋，所以每天照跑不特別加開關判斷，程式碼比較簡單。
+      (async () => {
+        try {
+          const result = await backfillUsBondIndicators(db);
+          console.log(`[cron] 美股公債/信用指標歷史回補：殖利率${result.tnxDays}天、信用比值${result.ratioDays}天`);
+          await logStep(db, 'usBondIndicatorsBackfill', nowHHMM, null);
+        } catch (e) {
+          console.error('[cron] 美股公債/信用指標歷史回補失敗：', e.message);
+          await logStep(db, 'usBondIndicatorsBackfill', nowHHMM, e.message);
         }
       })(),
     ]);
