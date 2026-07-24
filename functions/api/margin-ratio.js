@@ -143,7 +143,7 @@ async function fetchRecentMarginTradingDays(n) {
 // 不代表槓桿多，使用率高才是，兩者互補不是取代關係。
 //   分母「融資金額」：TWSE官方信用交易統計表本身就有現成的市場總額（仟元），不用自己加總推算。
 //   分子「擔保品市值」：個股明細表每檔股票的融資今日餘額（張）乘上該股最新收盤價（來自
-//     stock_daily_price，D1沒有這檔股票的收盤價就跳過不計入，不用猜的價格）加總得出。
+//     latest_stock_price，D1沒有這檔股票的收盤價就跳過不計入，不用猜的價格）加總得出。
 // 這是全市場「平均」維持率，不代表任何一個別投資人的實際風險——即使平均看起來健康，仍然
 // 可能有個別部位已經逼近追繳線，反之亦然，前端文案要誠實講清楚這個限制，不能當成保證。
 async function computeMaintenanceRatio(env, body) {
@@ -156,11 +156,7 @@ async function computeMaintenanceRatio(env, body) {
 
   try {
     const priceRows = await env.ELAN_QUANT_DB
-      .prepare(`
-        SELECT p.code, p.close FROM stock_daily_price p
-        INNER JOIN (SELECT code, MAX(date) as max_date FROM stock_daily_price GROUP BY code) m
-          ON p.code = m.code AND p.date = m.max_date
-      `)
+      .prepare('SELECT code, close FROM latest_stock_price')
       .all();
     const priceMap = new Map((priceRows.results || []).map(p => [p.code, p.close]));
 

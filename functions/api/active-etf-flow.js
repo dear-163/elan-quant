@@ -104,20 +104,13 @@ export async function onRequestGet(context) {
       etfsWithTodayData = new Set((etfTRows.results || []).map(r => r.etf_code));
     }
 
-    // Fetch each code's most recent close only (not the full 245-day history) — a plain
-    // unordered SELECT here previously let whichever row D1 happened to return last for a
-    // given code win, which in practice was often a stale price over a year old (e.g. TSMC's
-    // 2025-06-11 close of 1065 instead of its actual latest close of ~2460).
+    // latest_stock_price is a materialized "most recent close per code" table maintained
+    // by worker-cron on every write to stock_daily_price — avoids a per-request MAX(date)
+    // join here that previously (before that table existed) risked returning whichever
+    // row D1 happened to return last for a given code, which in practice was often a stale
+    // price over a year old (e.g. TSMC's 2025-06-11 close of 1065 instead of ~2460).
     const priceRows = await env.ELAN_QUANT_DB
-      .prepare(`
-        SELECT p.code, p.close, p.name
-        FROM stock_daily_price p
-        INNER JOIN (
-          SELECT code, MAX(date) as max_date
-          FROM stock_daily_price
-          GROUP BY code
-        ) m ON p.code = m.code AND p.date = m.max_date
-      `)
+      .prepare('SELECT code, close, name FROM latest_stock_price')
       .all();
     const priceMap = {};
     const nameMap = {};

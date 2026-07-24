@@ -86,12 +86,7 @@ export async function onRequestGet(context) {
     }
 
     const priceRows = await env.ELAN_QUANT_DB
-      .prepare(`
-        SELECT p.code, p.close
-        FROM stock_daily_price p
-        INNER JOIN (SELECT code, MAX(date) as max_date FROM stock_daily_price GROUP BY code) m
-          ON p.code = m.code AND p.date = m.max_date
-      `)
+      .prepare('SELECT code, close FROM latest_stock_price')
       .all();
     const priceMap = {};
     for (const p of (priceRows.results || [])) priceMap[p.code] = p.close;

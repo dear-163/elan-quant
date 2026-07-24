@@ -114,3 +114,14 @@ CREATE TABLE IF NOT EXISTS etf_signal_outcomes (
   win INTEGER,                    -- 1=方向正確（買超後漲/賣超後跌）、0=方向錯誤、NULL=還沒評估
   PRIMARY KEY (signal_date, stock_code)
 );
+
+-- 「每檔股票目前最新收盤價」的materialized表。market-flow.js／margin-ratio.js／
+-- active-etf-flow.js原本各自對stock_daily_price做一次「MAX(date) per code」的全表join，
+-- 三處查詢邏輯重複、且隨股票數增加會愈來愈慢。改由updateStockPricesAndCountNewHighLow
+-- 在每天寫入stock_daily_price的同時原地維護這張表，讀取端只要單純SELECT整張表即可。
+CREATE TABLE IF NOT EXISTS latest_stock_price (
+  code TEXT PRIMARY KEY,
+  date TEXT NOT NULL,
+  close REAL,
+  name TEXT
+);

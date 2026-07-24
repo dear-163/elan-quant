@@ -335,6 +335,12 @@ async function updateStockPricesAndCountNewHighLow(db, todayAd, stockRows) {
       db.prepare('INSERT OR REPLACE INTO stock_daily_price (code, date, close, high, low, name, volume) VALUES (?, ?, ?, ?, ?, ?, ?)')
         .bind(code, todayAd, close, high, low, name, volume)
     );
+    // 這個函式只會用「今天」的資料呼叫（唯一呼叫點是主排程流程，見下方scheduled()），
+    // 所以可以直接覆蓋latest_stock_price，不用再判斷日期新舊。
+    upserts.push(
+      db.prepare('INSERT OR REPLACE INTO latest_stock_price (code, date, close, name) VALUES (?, ?, ?, ?)')
+        .bind(code, todayAd, close, name)
+    );
   }
   await batchRun(db, upserts);
   return { newHighs, newLows };
