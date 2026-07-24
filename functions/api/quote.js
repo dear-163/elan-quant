@@ -103,35 +103,45 @@ export async function onRequestGet(context) {
 // TWSE 官方「個股即時資訊」系統（mis.twse.com.tw），delay=0 是公開網頁本來就在用的準即時報價
 // （官方回應本身會標註 userDelay，實測約 5-10 秒，遠比 Yahoo 的 chart API 快）。z（成交價）在兩筆
 // 成交之間可能是 "-"（還沒有新成交），這時退回買賣五檔的中間價，再退回昨收，不留空白。
-async function fetchTwseMisRealtimePrice(symbol) {
-  try {
-    const code = symbol.replace(/\.(TW|TWO)$/i, '');
-    const isOtc = /\.TWO$/i.test(symbol);
-    const exCh = `${isOtc ? 'otc' : 'tse'}_${code}.tw`;
-    const url = `https://mis.twse.com.tw/stock/api/getStockInfo.jsp?ex_ch=${encodeURIComponent(exCh)}&json=1&delay=0&_=${Date.now()}`;
-    const res = await fetch(url, {
-      headers: { 'User-Agent': BROWSER_HEADERS['User-Agent'], 'Referer': `https://mis.twse.com.tw/stock/fibest.jsp?stock=${code}` },
-    });
-    if (!res.ok) return null;
-    const j = await res.json();
-    const row = j?.msgArray?.[0];
-    if (!row) return null;
+async function fetchTwseMisRealtimePriceOnce(symbol) {
+  const code = symbol.replace(/\.(TW|TWO)$/i, '');
+  const isOtc = /\.TWO$/i.test(symbol);
+  const exCh = `${isOtc ? 'otc' : 'tse'}_${code}.tw`;
+  const url = `https://mis.twse.com.tw/stock/api/getStockInfo.jsp?ex_ch=${encodeURIComponent(exCh)}&json=1&delay=0&_=${Date.now()}`;
+  const res = await fetch(url, {
+    headers: { 'User-Agent': BROWSER_HEADERS['User-Agent'], 'Referer': `https://mis.twse.com.tw/stock/fibest.jsp?stock=${code}` },
+  });
+  if (!res.ok) return null;
+  const j = await res.json();
+  const row = j?.msgArray?.[0];
+  if (!row) return null;
 
-    let price = parseFloat(row.z);
-    if (!isFinite(price)) {
-      const bestAsk = parseFloat((row.a || '').split('_')[0]);
-      const bestBid = parseFloat((row.b || '').split('_')[0]);
-      if (isFinite(bestAsk) && isFinite(bestBid)) price = (bestAsk + bestBid) / 2;
-      else if (isFinite(bestBid)) price = bestBid;
-      else if (isFinite(bestAsk)) price = bestAsk;
-      else price = parseFloat(row.y);
-    }
-    if (!isFinite(price) || price <= 0) return null;
-
-    return { price, time: row.t || null, date: row.d || null };
-  } catch {
-    return null;
+  let price = parseFloat(row.z);
+  if (!isFinite(price)) {
+    const bestAsk = parseFloat((row.a || '').split('_')[0]);
+    const bestBid = parseFloat((row.b || '').split('_')[0]);
+    if (isFinite(bestAsk) && isFinite(bestBid)) price = (bestAsk + bestBid) / 2;
+    else if (isFinite(bestBid)) price = bestBid;
+    else if (isFinite(bestAsk)) price = bestAsk;
+    else price = parseFloat(row.y);
   }
+  if (!isFinite(price) || price <= 0) return null;
+
+  return { price, time: row.t || null, date: row.d || null };
+}
+
+// TWSE MIS這個端點對單次無狀態請求有機率性失敗（msgArray回空陣列，不是HTTP錯誤），跟
+// market-chart.js的fetchTwseIndex是同一個已知問題——那邊已經有重試3次的邏輯，這裡當初
+// 漏加，補上同樣的重試次數，降低使用者查台股個股時看到「沒有即時價、退回Yahoo延遲報價」
+// 的機率。
+async function fetchTwseMisRealtimePrice(symbol) {
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      const result = await fetchTwseMisRealtimePriceOnce(symbol);
+      if (result) return result;
+    } catch {}
+  }
+  return null;
 }
 
 async function fetchYahooCandles(symbol, period, interval) {
