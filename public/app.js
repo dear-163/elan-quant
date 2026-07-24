@@ -1919,6 +1919,14 @@ async function loadHomepageSentiment() {
     document.getElementById('homepageSentimentReady').textContent =
       data.readyCount != null ? `共 ${data.readyCount}/${data.totalIndicators} 項指標計入本次計算` : '';
 
+    // 只顯示總數的話，使用者不知道剩下幾項是「還沒抓到資料」還是「正在累積歷史，還差幾天」
+    // ——這兩種狀態意義差很多，之前就因為使用者看不出差別而誤以為指數長期失真。
+    const pending = (data.indicators || []).filter(i => i.status !== 'ready');
+    document.getElementById('homepageSentimentPending').innerHTML = pending.length
+      ? `<div style="color:var(--text2);margin-bottom:2px;">尚在累積歷史、暫未計入分數：</div>` +
+        pending.map(i => `<div>・${escapeHtml(i.label)}${i.status === 'no_data' ? '（暫無資料）' : `：目前 ${escapeHtml(i.maturity)} 天`}</div>`).join('')
+      : '';
+
     const sources = [...new Set((data.indicators || []).filter(i => i.status === 'ready').map(i => i.source))];
     document.getElementById('homepageSentimentSources').textContent = sources.length ? `資料來源：${sources.join('、')}` : '';
     document.getElementById('homepageSentimentDate').innerHTML = data.latestDate
